@@ -1,0 +1,32 @@
+{
+    "version": 3,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 21,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "default",
+            "displayName": "Default Config",
+            "cacheVariables": {
+		"CMAKE_BUILD_TYPE": "Release",
+		"QUIVER_BUILD_TESTS": "ON",
+		"BUILD_SHARED_LIBS": "ON"
+	    }
+        },
+        {
+            "name": "dev",
+            "inherits": [
+                "default"
+            ],
+            "displayName": "Debug mode with tests and coverage",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "QUIVER_BUILD_TESTS": "ON",
+                "QUIVER_CODE_COVERAGE": "ON",
+		"BUILD_SHARED_LIBS": "ON"
+            }
+        }
+    ]
+}
