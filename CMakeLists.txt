@@ -3,8 +3,6 @@
 message(STATUS "Building using CMake version: ${CMAKE_VERSION}")
 cmake_minimum_required(VERSION 3.16)
 
-cmake_policy(SET CMP0135 NEW)
-
 set(QUIVER_VERSION "0.1.0-SNAPSHOT")
 string(REGEX MATCH "^[0-9]+\\.[0-9]+\\.[0-9]+" QUIVER_BASE_VERSION "${QUIVER_VERSION}")
 project(quiver VERSION "${QUIVER_BASE_VERSION}")
@@ -53,10 +51,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_library(
     quiver
     src/quiver/lib.cc
+    src/quiver/core/array.cc
     src/quiver/store/mmap_store.cc
     src/quiver/util/cpu_info.cc
     src/quiver/util/logging_p.cc
     src/quiver/util/memory.cc
+    src/quiver/util/memory_pool.cc
     src/quiver/util/status.cc
     src/quiver/util/string_builder.cc)
 

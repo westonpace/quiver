@@ -8,5 +8,4 @@ namespace quiver::util {
 ///
 /// This function supports Windows, Linux, and Mac and will return 0 otherwise
 int64_t GetTotalMemoryBytes();
-
 }  // namespace quiver::util
