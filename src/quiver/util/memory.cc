@@ -6,7 +6,8 @@
 #include "quiver/util/logging_p.h"
 
 #ifdef _WIN32
-#include <psapi.h>
+#include "windows_p.h"
+#undef WIN32_LEAN_AND_MEAN
 
 #elif __APPLE__
 #include <mach/mach.h>
@@ -22,7 +23,7 @@ int64_t GetTotalMemoryBytes() {
 #if defined(_WIN32)
   ULONGLONG result_kb;
   if (!GetPhysicallyInstalledSystemMemory(&result_kb)) {
-    ARROW_LOG(WARNING) << "Failed to resolve total RAM size: "
+    QUIVER_LOG(kWarning) << "Failed to resolve total RAM size: "
                        << std::strerror(GetLastError());
     return -1;
   }

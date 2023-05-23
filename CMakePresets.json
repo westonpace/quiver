@@ -1,10 +1,17 @@
 {
     "version": 3,
-    "cmakeMinimumRequired": {
-        "major": 3,
-        "minor": 21,
-        "patch": 0
-    },
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "buildPresets": [
+    {
+      "name": "devBuild",
+      "configurePreset": "dev",
+      "configuration": "Debug"
+    }
+  ],
     "configurePresets": [
         {
             "name": "default",
@@ -15,18 +22,19 @@
 		"BUILD_SHARED_LIBS": "ON"
 	    }
         },
-        {
-            "name": "dev",
-            "inherits": [
-                "default"
-            ],
-            "displayName": "Debug mode with tests and coverage",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug",
-                "QUIVER_BUILD_TESTS": "ON",
-                "QUIVER_CODE_COVERAGE": "ON",
-		"BUILD_SHARED_LIBS": "ON"
-            }
+      {
+        "name": "dev",
+        "inherits": [
+          "default"
+        ],
+        "displayName": "Debug mode with tests and coverage",
+        "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "cacheVariables": {
+          "CMAKE_BUILD_TYPE": "Debug",
+          "QUIVER_BUILD_TESTS": "ON",
+          "QUIVER_CODE_COVERAGE": "ON",
+          "BUILD_SHARED_LIBS": "ON"
         }
+      }
     ]
 }

@@ -13,6 +13,25 @@
 
 namespace quiver {
 
+namespace layout {
+bool is_variable_length(LayoutKind kind) {
+  switch (kind) {
+    case LayoutKind::kFlat:
+    case LayoutKind::kStructArray:
+    case LayoutKind::kFixedListArray:
+      return false;
+    case LayoutKind::kInt32ContiguousList:
+    case LayoutKind::kInt64ContiguousList:
+    // Union might be fixed length but without knowing all the types
+    // we can't tell
+    case LayoutKind::kUnion:
+      return true;
+  }
+  QUIVER_CHECK(false) << "Should be unreachable";
+  return false;
+}
+}  // namespace layout
+
 namespace {
 
 int32_t CountNumBuffers(const ArrowArray& array) {

@@ -5,9 +5,11 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cmath>
 #include <fstream>
 
 #include "quiver/util/constants.h"
+#include "quiver/util/logging_p.h"
 
 #ifdef __APPLE__
 #include <sys/sysctl.h>
@@ -18,9 +20,7 @@
 #endif
 
 #ifdef _WIN32
-#include <intrin.h>
-
-#include "arrow/util/windows_compatibility.h"
+#include "windows_p.h"
 #endif
 
 namespace quiver::util {
@@ -42,13 +42,13 @@ void OsRetrieveCacheSize(std::array<int64_t, kCacheLevels>* cache_sizes) {
           GetModuleHandle("kernel32"), "GetLogicalProcessorInformation");
 
   if (!func_pointer) {
-    ARROW_LOG(WARNING) << "Failed to find procedure GetLogicalProcessorInformation";
+    QUIVER_LOG(kWarning) << "Failed to find procedure GetLogicalProcessorInformation";
     return;
   }
 
   // Get buffer size
   if (func_pointer(buffer, &buffer_size) && GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-    ARROW_LOG(WARNING) << "Failed to get size of processor information buffer";
+    QUIVER_LOG(kWarning) << "Failed to get size of processor information buffer";
     return;
   }
 
@@ -58,7 +58,7 @@ void OsRetrieveCacheSize(std::array<int64_t, kCacheLevels>* cache_sizes) {
   }
 
   if (!func_pointer(buffer, &buffer_size)) {
-    ARROW_LOG(WARNING) << "Failed to get processor information";
+    QUIVER_LOG(kWarning) << "Failed to get processor information";
     free(buffer);
     return;
   }

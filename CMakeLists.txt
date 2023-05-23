@@ -29,20 +29,18 @@ configure_file(src/quiver/build_id.h.in generated/build_id.h)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(WIN32)
+  # gcov does not exist on windows
+  set(QUIVER_CODE_COVERAGE OFF)
+endif()
+
 if(QUIVER_CODE_COVERAGE)
-#     add_library(coverage_config INTERFACE)
     include(CodeCoverage)
 endif()
 
 if(QUIVER_BUILD_TESTS)
-    include(FetchContent)
-    include(CTest)
-
-    FetchContent_Declare(
-        googletest
-        URL https://github.com/google/googletest/archive/release-1.11.0.zip
-    )
-    FetchContent_MakeAvailable(googletest)
+    find_package(GTest CONFIG REQUIRED)
+    enable_testing()
 endif()
 
 # Have to enable clang-tidy after building 3rd party libs
@@ -50,6 +48,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_library(
     quiver
+    STATIC
     src/quiver/lib.cc
     src/quiver/core/array.cc
     src/quiver/store/mmap_store.cc
@@ -92,10 +91,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     endif()
 endif()
 
-install(TARGETS quiver DESTINATION lib)
-install(DIRECTORY src/ DESTINATION include FILES_MATCHING PATTERN "*.h")
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/generated/build_id.h DESTINATION include/quiver)
-
 if(QUIVER_BUILD_TESTS)
     add_executable(test_test src/quiver/test_test.cc)
     add_executable(
@@ -106,9 +101,9 @@ if(QUIVER_BUILD_TESTS)
         store_test
         src/quiver/store/mmap_store_test.cc)
     
-    target_link_libraries(test_test quiver GTest::gtest_main)
-    target_link_libraries(utility_test quiver GTest::gtest_main)
-    target_link_libraries(store_test quiver GTest::gtest_main)
+    target_link_libraries(test_test PRIVATE quiver GTest::gtest_main)
+    target_link_libraries(utility_test PRIVATE quiver GTest::gtest_main)
+    target_link_libraries(store_test PRIVATE quiver GTest::gtest_main)
 
     include(GoogleTest)
     gtest_discover_tests(test_test)
@@ -124,3 +119,7 @@ if(QUIVER_CODE_COVERAGE)
         EXCLUDE "build/*"
     )
 endif()
+
+install(TARGETS quiver DESTINATION lib)
+install(DIRECTORY src/ DESTINATION include FILES_MATCHING PATTERN "*.h")
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/generated/build_id.h DESTINATION include/quiver)

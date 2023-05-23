@@ -25,20 +25,7 @@ enum class LayoutKind : std::size_t {
 
 namespace layout {
 
-bool is_variable_length(LayoutKind kind) {
-  switch (kind) {
-    case LayoutKind::kFlat:
-    case LayoutKind::kStructArray:
-    case LayoutKind::kFixedListArray:
-      return false;
-    case LayoutKind::kInt32ContiguousList:
-    case LayoutKind::kInt64ContiguousList:
-    // Union might be fixed length but without knowing all the types
-    // we can't tell
-    case LayoutKind::kUnion:
-      return true;
-  }
-}
+bool is_variable_length(LayoutKind kind);
 
 }  // namespace layout
 
@@ -71,6 +58,8 @@ struct FieldDescriptor {
   int data_width_bytes;
   SimpleSchema* schema;
 
+  // Default shallow equality
+  auto operator<=>(const FieldDescriptor&) const = default;
   FieldDescriptor& child(int child_index) const;
 };
 
