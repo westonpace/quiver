@@ -6,12 +6,13 @@
 
 #include <variant>
 
+#include "quiver/util/logging_p.h"
 #include "quiver/util/status.h"
 
 namespace quiver::util {
 
 template <typename T, typename... Types>
-Status checked_get(const std::variant<Types...>* var, const T* out) {
+Status get_or_raise(const std::variant<Types...>* var, const T* out) {
   T* maybe_val = std::get_if<T>(var);
   if (maybe_val == nullptr) {
     return Status::UnknownError("Expected to be able to get variant of type ",
@@ -22,7 +23,7 @@ Status checked_get(const std::variant<Types...>* var, const T* out) {
 }
 
 template <typename T, typename... Types>
-Status checked_get(std::variant<Types...>* var, T* out) {
+Status get_or_raise(std::variant<Types...>* var, T* out) {
   T* maybe_val = std::get_if<T>(var);
   if (maybe_val == nullptr) {
     return Status::UnknownError("Expected to be able to get variant of type ",

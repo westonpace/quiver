@@ -10,19 +10,23 @@
 #     guide and we agree with the rationale in the style guide.  Namely that there are
 #     too many large existing code bases that will not migrate.
 
-Checks:
-    bugprone-*,
+Checks: bugprone-*,
     llvm-*,
     misc-*,
     modernize-*,
     performance-*,
     portability-*,
     readability-*,
+    -bugprone-easily-swappable-parameters,
     -llvm-header-guard,
+    -misc-no-recursion,
     -modernize-use-trailing-return-type,
+    -readability-function-cognitive-complexity,
 
-WarningsAsErrors:
-    '*'
+CheckOptions:
+    misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic: true
+    readability-magic-numbers.IgnoredIntegerValues: 0;1;2;3;4;8
 
-HeaderFilterRegex:
-    '*'
+WarningsAsErrors: "*"
+
+HeaderFilterRegex: "*"

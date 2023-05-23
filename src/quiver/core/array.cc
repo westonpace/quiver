@@ -14,6 +14,17 @@
 namespace quiver {
 
 namespace layout {
+
+namespace {
+constexpr std::array kLayoutKindNames = {
+    "flat", "list", "large list", "struct", "fixed size list", "union"};
+
+}  // namespace
+
+std::string_view to_string(LayoutKind layout) {
+  return kLayoutKindNames[static_cast<std::size_t>(layout)];
+}
+
 bool is_variable_length(LayoutKind kind) {
   switch (kind) {
     case LayoutKind::kFlat:
@@ -34,18 +45,6 @@ bool is_variable_length(LayoutKind kind) {
 
 namespace {
 
-int32_t CountNumBuffers(const ArrowArray& array) {
-  int32_t num_buffers = 0;
-  num_buffers += array.n_buffers;
-  if (array.dictionary != nullptr) {
-    num_buffers += CountNumBuffers(*array.dictionary);
-  }
-  for (int32_t child_idx = 0; child_idx < array.n_children; child_idx++) {
-    num_buffers += CountNumBuffers(*(array.children[child_idx]));
-  }
-  return num_buffers;
-}
-
 int64_t CountNumFields(const ArrowSchema& schema) {
   int64_t num_fields = 0;
   for (int64_t i = 0; i < schema.n_children; i++) {
@@ -57,21 +56,25 @@ int64_t CountNumFields(const ArrowSchema& schema) {
   return num_fields;
 }
 
+constexpr int kDefaultDecimalBitwidth = 128;
+
 Status CopyArrowSchema(const ArrowSchema& schema, FieldDescriptor* descriptor,
                        int index) {
   descriptor->format = std::string(schema.format);
   descriptor->metadata = std::string(schema.metadata);
   descriptor->name = std::string(schema.name);
-  descriptor->num_children = schema.n_children;
+  descriptor->num_children = static_cast<int32_t>(schema.n_children);
   if (schema.dictionary != nullptr) {
     descriptor->num_children++;
   }
-  descriptor->nullable = schema.flags & ARROW_FLAG_NULLABLE;
-  descriptor->map_keys_sorted = schema.flags & ARROW_FLAG_MAP_KEYS_SORTED;
-  descriptor->dict_indices_ordered = schema.flags & ARROW_FLAG_DICTIONARY_ORDERED;
+  descriptor->nullable = ((schema.flags & ARROW_FLAG_NULLABLE) != 0);
+  descriptor->map_keys_sorted = ((schema.flags & ARROW_FLAG_MAP_KEYS_SORTED) != 0);
+  descriptor->dict_indices_ordered =
+      ((schema.flags & ARROW_FLAG_DICTIONARY_ORDERED) != 0);
   descriptor->layout = LayoutKind::kFlat;
   descriptor->index = index;
   std::string_view format = descriptor->format;
+  // NOLINTBEGIN(bugprone-branch-clone)
   if (format == "n") {
     descriptor->data_width_bytes = -1;
   } else if (format == "b") {
@@ -124,7 +127,7 @@ Status CopyArrowSchema(const ArrowSchema& schema, FieldDescriptor* descriptor,
     }
     reader.ignore(1);
     if (reader.eof()) {
-      bitwidth = 128;
+      bitwidth = kDefaultDecimalBitwidth;
     } else {
       reader >> bitwidth;
       if (reader.fail()) {
@@ -167,7 +170,7 @@ Status CopyArrowSchema(const ArrowSchema& schema, FieldDescriptor* descriptor,
   } else if (format == "tiD") {
     descriptor->data_width_bytes = 8;
   } else if (format == "tin") {
-    descriptor->data_width_bytes = 16;
+    descriptor->data_width_bytes = 16;  // NOLINT(readability-magic-numbers)
   } else if (format == "+l") {
     descriptor->data_width_bytes = 4;
     descriptor->layout = LayoutKind::kInt32ContiguousList;
@@ -190,6 +193,7 @@ Status CopyArrowSchema(const ArrowSchema& schema, FieldDescriptor* descriptor,
     descriptor->data_width_bytes = -1;
     descriptor->layout = LayoutKind::kUnion;
   }
+  // NOLINTEND(bugprone-branch-clone)
   return Status::OK();
 }
 
@@ -247,7 +251,7 @@ Status GetBufferOrEmptySpan(const ArrowArray& array, int index, int64_t length, 
                             LayoutKind layout, std::span<T>* out) {
   if (array.n_buffers <= index) {
     return Status::Invalid("Expected a buffer at index ", index, " for an array with ",
-                           LayoutToString(layout),
+                           layout::to_string(layout),
                            " layout but none (not even nullptr) was present");
   }
   auto buff_or_null = reinterpret_cast<T*>(array.buffers[index]);
@@ -263,20 +267,23 @@ Status GetBufferOrEmptySpan(const ArrowArray& array, int index, int64_t length, 
 
 class ImportedBatch : public ReadOnlyBatch {
  public:
-  const ReadOnlyArray& array(int32_t index) const override {
+  [[nodiscard]] const ReadOnlyArray& array(int32_t index) const override {
     DCHECK_GE(index, 0);
     DCHECK_LT(index, arrays_.size());
     return arrays_[index];
   }
 
-  int32_t num_arrays() const override { return arrays_.size(); }
-  const SimpleSchema* schema() const override { return schema_; };
+  [[nodiscard]] int32_t num_arrays() const override {
+    return static_cast<int32_t>(arrays_.size());
+  }
+  [[nodiscard]] const SimpleSchema* schema() const override { return schema_; }
+  [[nodiscard]] int64_t length() const override { return length_; }
 
   ImportedBatch() = default;
   ImportedBatch(const ImportedBatch&) = delete;
   ImportedBatch& operator=(const ImportedBatch&) = delete;
 
-  ImportedBatch(ImportedBatch&& other)
+  ImportedBatch(ImportedBatch&& other) noexcept
       : schema_(other.schema_),
         arrays_(std::move(other.arrays_)),
         backing_array_(other.backing_array_) {
@@ -284,7 +291,7 @@ class ImportedBatch : public ReadOnlyBatch {
     other.backing_array_ = nullptr;
   }
 
-  ImportedBatch& operator=(ImportedBatch&& other) {
+  ImportedBatch& operator=(ImportedBatch&& other) noexcept {
     schema_ = other.schema_;
     arrays_ = std::move(other.arrays_);
     other.backing_array_ = nullptr;
@@ -292,7 +299,7 @@ class ImportedBatch : public ReadOnlyBatch {
   }
 
   ~ImportedBatch() {
-    if (backing_array_ && backing_array_->release != nullptr) {
+    if ((backing_array_ != nullptr) && backing_array_->release != nullptr) {
       backing_array_->release(backing_array_);
     }
   }
@@ -302,7 +309,7 @@ class ImportedBatch : public ReadOnlyBatch {
     if (array.offset != 0) {
       return Status::NotImplemented("support for offsets in imported arrays");
     }
-    int index = arrays_.size();
+    auto index = static_cast<int32_t>(arrays_.size());
 
     int64_t length = array.length;
     std::span<const uint8_t> validity;
@@ -318,14 +325,14 @@ class ImportedBatch : public ReadOnlyBatch {
         std::span<const uint8_t> values;
         QUIVER_RETURN_NOT_OK(GetBufferOrEmptySpan<const uint8_t>(
             array, /*index=*/1, length, field.data_width_bytes, field.layout, &values));
-        arrays_.push_back(ReadOnlyFlatArray(validity, values, &field, length));
+        arrays_.emplace_back(ReadOnlyFlatArray(validity, values, &field, length));
         break;
       }
       case LayoutKind::kInt32ContiguousList: {
         std::span<const int32_t> offsets;
         QUIVER_RETURN_NOT_OK(GetBufferOrEmptySpan<const int32_t>(
             array, /*index=*/1, length, /*width=*/1, field.layout, &offsets));
-        arrays_.push_back(
+        arrays_.emplace_back(
             ReadOnlyInt32ContiguousListArray(validity, offsets, length + 1));
         if (std::string_view(field.format).starts_with("+")) {
           if (array.n_children == 0) {
@@ -339,35 +346,38 @@ class ImportedBatch : public ReadOnlyBatch {
         std::span<const int64_t> offsets;
         QUIVER_RETURN_NOT_OK(GetBufferOrEmptySpan<const int64_t>(
             array, /*index=*/1, length, /*width=*/1, field.layout, &offsets));
-        arrays_.push_back(
+        arrays_.emplace_back(
             ReadOnlyInt64ContiguousListArray(validity, offsets, length + 1));
         // There is a child array here but the only variations of int64 list are binary
         // and we handle those specially below
         break;
       }
+      default:
+        return Status::NotImplemented("No support yet for importing array type: ",
+                                      layout::to_string(field.layout));
     }
 
     // The arrow spec treats string arrays as a special kind of layout but quiver makes
     // them look like list arrays for simplicity
     if (field.format == "z" || field.format == "u") {
       ReadOnlyInt32ContiguousListArray list_arr;
-      QUIVER_RETURN_NOT_OK(util::checked_get(&arrays_.back(), &list_arr));
+      QUIVER_RETURN_NOT_OK(util::get_or_raise(&arrays_.back(), &list_arr));
       int32_t data_length = list_arr.offsets[length];
       std::span<const uint8_t> str_data;
       std::span<const uint8_t> str_validity;
       QUIVER_RETURN_NOT_OK(GetBufferOrEmptySpan<const uint8_t>(
           array, /*index=*/2, data_length, /*width=*/1, field.layout, &str_data));
-      arrays_.push_back(
+      arrays_.emplace_back(
           ReadOnlyFlatArray(str_validity, str_data, &field.child(0), length));
     } else if (field.format == "Z" || field.format == "U") {
       ReadOnlyInt64ContiguousListArray list_arr;
-      QUIVER_RETURN_NOT_OK(util::checked_get(&arrays_.back(), &list_arr));
+      QUIVER_RETURN_NOT_OK(util::get_or_raise(&arrays_.back(), &list_arr));
       int64_t data_length = list_arr.offsets[length];
       std::span<const uint8_t> str_data;
       std::span<const uint8_t> str_validity;
       QUIVER_RETURN_NOT_OK(GetBufferOrEmptySpan<const uint8_t>(
           array, /*index=*/2, data_length, /*width=*/1, field.layout, &str_data));
-      arrays_.push_back(
+      arrays_.emplace_back(
           ReadOnlyFlatArray(str_validity, str_data, &field.child(0), length));
     }
     return Status::OK();
@@ -376,6 +386,7 @@ class ImportedBatch : public ReadOnlyBatch {
   const SimpleSchema* schema_;
   std::vector<ReadOnlyArray> arrays_;
   ArrowArray* backing_array_ = nullptr;
+  int64_t length_;
 
   friend Status ImportBatch(ArrowArray* array, SimpleSchema* schema,
                             std::unique_ptr<ReadOnlyBatch>* out);
@@ -397,6 +408,7 @@ Status ImportBatch(ArrowArray* array, SimpleSchema* schema,
   }
   imported_batch->backing_array_ = array;
   imported_batch->schema_ = schema;
+  imported_batch->length_ = array->length;
   imported_batch->arrays_.reserve(schema->num_types());
   for (int i = 0; i < static_cast<int>(array->n_children); i++) {
     QUIVER_RETURN_NOT_OK(

@@ -51,9 +51,9 @@ constexpr int64_t CeilDiv(int64_t value, int64_t divisor) {
 /// bytes needed to get from x to the next pwr_2
 ///
 /// For example, PaddingNeededPwr2(5, 16) = 11
-static inline uint32_t PaddingNeededPwr2(uint32_t x, int pwr_2) {
+static inline int32_t PaddingNeededPwr2(int32_t offset, int pwr_2) {
   QUIVER_DCHECK(IsPwr2(pwr_2));
-  return static_cast<uint32_t>((-static_cast<int32_t>(x)) & (pwr_2 - 1));
+  return (-offset) & (pwr_2 - 1);
 }
 
 }  // namespace quiver::bit_util
