@@ -35,15 +35,22 @@ namespace quiver::row {
 /// Each row (with N fixed-length columns and M variable-length columns) is stored in the
 /// following form:
 ///
-/// | FIX_0 | FIX_1 | . | FIX_N | END_0 | END_1 | . | END_M | VAR_0 | VAR_1 | . | VAR_M |
+/// | FIX_0 | FIX_1 | . | FIX_N | VALID_0 | VALID_LOG_2(N) | VAR_0 | VAR_1 | . | VAR_M |
 ///
-/// FIX_x is a fixed-length column value
-/// END_x is an offset from the first byte of the row to the end of VAR_x (one byte after)
-/// VAR_x is a variable-length column value
+/// FIX_x is the fixed-length portion of the column value
+/// VALID_x is the validity-bitmap of the row
+/// VAR_x is the variable-length portion of the column value
 ///
-/// Each variable-length value is aligned according to a given alignment.
+/// Each value is aligned as follows:
 ///
-/// Validity information is kept in a separate array.
+/// A fixed value, that is a bit, is packed into a byte with no alignment
+/// A fixed value, that is a power of 2 # of bytes, has no padding
+/// A fixed value, that is a non-power of 2 # of bytes, is padded to string_alignment
+/// Variable length values are padded to string_alignment
+///
+/// TODO: Why pad bytes to string_alignment?  Does it matter?
+///
+/// Each row is aligned to row_alignment
 struct RowSchema {
   /// \brief True if there are no variable length columns in the table
   bool is_fixed_length = true;
@@ -69,12 +76,7 @@ struct RowSchema {
   /// will start aligned to that number of bytes.
   int32_t string_alignment;
 
-  /// Metadata of encoded columns in their original order.
   const SimpleSchema* schema = nullptr;
-
-  /// Order in which fields are encoded.
-  std::vector<int32_t> column_order;
-  std::vector<int32_t> inverse_column_order;
 
   /// Offsets within a row to fields in their encoding order.
   std::vector<int32_t> column_offsets;
@@ -84,24 +86,6 @@ struct RowSchema {
 
   Status Initialize(const SimpleSchema& schema);
 
-  /// Rounding up offset to the beginning of next column,
-  /// choosing required alignment based on the data type of that column.
-  static int32_t PaddingNeeded(int32_t offset, int32_t string_alignment,
-                               const FieldDescriptor& field) {
-    if (bit_util::IsPwr2OrZero(field.data_width_bytes)) {
-      return 0;
-    }
-    return bit_util::PaddingNeededPwr2(offset, string_alignment);
-  }
-
-  [[nodiscard]] int32_t encoded_field_order(int32_t icol) const {
-    return column_order[icol];
-  }
-
-  [[nodiscard]] int32_t pos_after_encoding(int32_t icol) const {
-    return inverse_column_order[icol];
-  }
-
   [[nodiscard]] int32_t encoded_field_offset(int32_t icol) const {
     return column_offsets[icol];
   }
@@ -110,15 +94,15 @@ struct RowSchema {
 
   [[nodiscard]] int32_t num_varbinary_cols() const;
 
-  /// \brief True if `other` has the same number of columns
-  ///   and each column has the same width (two variable length
-  ///   columns are considered to have the same width)
+  /// \brief True if `other` is based on the same schema
   [[nodiscard]] bool IsCompatible(const RowSchema& other) const;
 };
 
 class RowQueueAppendingProducer {
  public:
   virtual Status Append(const ReadOnlyBatch& batch) = 0;
+  static Status Create(RowSchema* row_schema, Sink* sink,
+                       std::unique_ptr<RowQueueAppendingProducer>* out);
 };
 
 class RowQueueRandomAccessConsumer {

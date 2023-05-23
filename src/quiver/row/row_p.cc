@@ -17,6 +17,8 @@
 
 #include "quiver/row/row_p.h"
 
+#include <memory>
+
 #include "quiver/util/variant_p.h"
 
 namespace quiver::row {
@@ -69,6 +71,16 @@ Status CheckSupportsSchema(const SimpleSchema& schema) {
 
 bool IsInitialized(const RowSchema& metadata) { return metadata.schema != nullptr; }
 
+// Rounding up offset to the beginning of next column,
+// choosing required alignment based on the data type of that column.
+int32_t PaddingNeeded(int32_t offset, int32_t string_alignment,
+                      const FieldDescriptor& field) {
+  if (bit_util::IsPwr2OrZero(field.data_width_bytes)) {
+    return 0;
+  }
+  return bit_util::PaddingNeededPwr2(offset, string_alignment);
+}
+
 }  // namespace
 
 Status RowSchema::Initialize(const SimpleSchema& schema) {
@@ -80,68 +92,14 @@ Status RowSchema::Initialize(const SimpleSchema& schema) {
 
   const auto num_cols = static_cast<int32_t>(schema.types.size());
 
-  // Sort columns.
-  //
-  // Columns are sorted based on the size in bytes of their fixed-length part.
-  // For the varying-length column, the fixed-length part is the 32-bit field storing
-  // cumulative length of varying-length fields.
-  //
-  // The rules are:
-  //
-  // a) Boolean column, marked with fixed-length 0, is considered to have fixed-length
-  // part of 1 byte.
-  //
-  // b) Columns with fixed-length part being power of 2 or multiple of row
-  // alignment precede other columns. They are sorted in decreasing order of the size of
-  // their fixed-length part.
-  //
-  // c) Fixed-length columns precede varying-length columns when
-  // both have the same size fixed-length part.
-  //
-  column_order.resize(num_cols);
-  for (int32_t i = 0; i < num_cols; ++i) {
-    column_order[i] = i;
-  }
-  std::sort(column_order.begin(), column_order.end(),
-            [&](int32_t left_index, int32_t right_index) {
-              const FieldDescriptor& left = schema.types[left_index];
-              const FieldDescriptor& right = schema.types[right_index];
-              bool is_left_fixedlen = !layout::is_variable_length(left.layout);
-              bool is_right_fixedlen = !layout::is_variable_length(right.layout);
-              bool is_left_pow2 =
-                  !is_left_fixedlen || bit_util::IsPwr2OrZero(left.data_width_bytes);
-              bool is_right_pow2 =
-                  !is_right_fixedlen || bit_util::IsPwr2OrZero(right.data_width_bytes);
-              int32_t width_left = left.data_width_bytes;
-              int32_t width_right = right.data_width_bytes;
-              if (is_left_pow2 != is_right_pow2) {
-                return is_left_pow2;
-              }
-              if (!is_left_pow2) {
-                return left_index < right_index;
-              }
-              if (width_left != width_right) {
-                return width_left > width_right;
-              }
-              if (is_left_fixedlen != is_right_fixedlen) {
-                return is_left_fixedlen;
-              }
-              return left_index < right_index;
-            });
-  inverse_column_order.resize(num_cols);
-  for (int32_t i = 0; i < num_cols; ++i) {
-    inverse_column_order[column_order[i]] = i;
-  }
-
   is_fixed_length = true;
 
   column_offsets.resize(num_cols);
   int32_t num_varbinary_cols = 0;
   int32_t offset_within_row = 0;
   for (int32_t i = 0; i < num_cols; ++i) {
-    const FieldDescriptor& col = schema.top_level_types[column_order[i]];
-    offset_within_row +=
-        RowSchema::PaddingNeeded(offset_within_row, string_alignment, col);
+    const FieldDescriptor& col = schema.top_level_types[i];
+    offset_within_row += PaddingNeeded(offset_within_row, string_alignment, col);
     column_offsets[i] = offset_within_row;
     is_fixed_length &= !layout::is_variable_length(col.layout);
     if (col.data_width_bytes == 0) {
@@ -179,34 +137,38 @@ Status RowSchema::Initialize(const SimpleSchema& schema) {
 
 class FlatEncoder {
  public:
-  void Prepare(const ReadOnlyArray& array, const FieldDescriptor& field) {
+  FlatEncoder(const FieldDescriptor& field) : field_(field) {
+    width_ = field_.data_width_bytes;
+  }
+
+  void Prepare(const ReadOnlyArray& array) {
     const auto& flat_array = std::get<ReadOnlyFlatArray>(array);
-    values = flat_array.values.data();
-    validity = flat_array.validity.data();
-    width = field.data_width_bytes;
-    bitmask = 1;
+    values_ = flat_array.values.data();
+    validity_ = flat_array.validity.data();
+    bitmask_ = 1;
   }
 
   void EncodeValue(Sink* sink) {
-    sink->CopyInto(values, width);
-    values += width;
+    sink->CopyInto(values_, width_);
+    values_ += width_;
   }
 
   bool EncodeValid() {
-    bool is_valid = (*validity & bitmask) != 0;
-    bitmask <<= 1;
-    if (bitmask == 0) {
-      bitmask = 1;
-      validity++;
+    bool is_valid = (*validity_ & bitmask_) != 0;
+    bitmask_ <<= 1;
+    if (bitmask_ == 0) {
+      bitmask_ = 1;
+      validity_++;
     }
     return is_valid;
   }
 
  private:
-  const uint8_t* values;
-  const uint8_t* validity;
-  int width;
-  uint8_t bitmask;
+  const FieldDescriptor& field_;
+  const uint8_t* values_;
+  const uint8_t* validity_;
+  int width_;
+  uint8_t bitmask_;
 };
 
 template <typename ArrayType, typename OffsetType>
@@ -235,6 +197,25 @@ class ContiguousListEncoder {
 
 class RowQueueAppendingProducerImpl : public RowQueueAppendingProducer {
  public:
+  RowQueueAppendingProducerImpl(RowSchema* schema, Sink* sink)
+      : schema_(schema), sink_(sink) {}
+
+  Status Initialize() {
+    for (std::size_t field_idx = 0; field_idx < schema_->schema->top_level_types.size();
+         field_idx++) {
+      const auto& field = schema_->schema->top_level_types[field_idx];
+      switch (field.layout) {
+        case LayoutKind::kFlat:
+          flat_col_indices.push_back(static_cast<int32_t>(field_idx));
+          flat_encoders.emplace_back(field);
+        default:
+          return Status::Invalid("No row based encoder yet provided for layout ",
+                                 layout::to_string(field.layout));
+      }
+    }
+    return Status::OK();
+  }
+
   Status Append(const ReadOnlyBatch& batch) override {
     // Prepare
     for (std::size_t flat_idx = 0; flat_idx < flat_col_indices.size(); flat_idx++) {
@@ -268,6 +249,7 @@ class RowQueueAppendingProducerImpl : public RowQueueAppendingProducer {
   }
 
  private:
+  RowSchema* schema_;
   Sink* sink_;
   std::vector<int32_t> flat_col_indices;
   std::vector<FlatEncoder> flat_encoders;
@@ -279,286 +261,10 @@ class RowQueueAppendingProducerImpl : public RowQueueAppendingProducer {
       clist_int64_encoders;
 };
 
-// Status
-// RowQueueAppendingProducer::Append(const Batch& batch) {
-//   for (int row_idx = 0; row_idx < batch.) rows->Clean();
-//   RETURN_NOT_OK(
-//       rows->AppendEmpty(static_cast<uint32_t>(num_selected),
-//       static_cast<uint32_t>(0)));
-
-//   EncoderOffsets::GetRowOffsetsSelected(rows, batch_varbinary_cols_, num_selected,
-//                                         selection);
-
-//   RETURN_NOT_OK(rows->AppendEmpty(static_cast<uint32_t>(0),
-//                                   static_cast<uint32_t>(rows->offsets()[num_selected])));
-
-//   for (size_t icol = 0; icol < batch_all_cols_.size(); ++icol) {
-//     if (batch_all_cols_[icol].metadata().is_fixed_length) {
-//       uint32_t offset_within_row = rows->metadata().column_offsets[icol];
-//       EncoderBinary::EncodeSelected(offset_within_row, rows, batch_all_cols_[icol],
-//                                     num_selected, selection);
-//     }
-//   }
-
-//   EncoderOffsets::EncodeSelected(rows, batch_varbinary_cols_, num_selected, selection);
-
-//   for (size_t icol = 0; icol < batch_varbinary_cols_.size(); ++icol) {
-//     EncoderVarBinary::EncodeSelected(static_cast<uint32_t>(icol), rows,
-//                                      batch_varbinary_cols_[icol], num_selected,
-//                                      selection);
-//   }
-
-//   EncoderNulls::EncodeSelected(rows, batch_all_cols_, num_selected, selection);
-
-//   return Status::OK();
-// }
-
-// RowBatchImpl::RowBatchImpl() : pool_(nullptr), rows_capacity_(0), bytes_capacity_(0) {}
-
-// Status RowBatchImpl::Init(MemoryPool* pool, const RowSchema& metadata) {
-//   pool_ = pool;
-//   metadata_ = metadata;
-
-//   DCHECK(!null_masks_ && !offsets_ && !rows_);
-
-//   constexpr int64_t kInitialRowsCapacity = 8;
-//   constexpr int64_t kInitialBytesCapacity = 1024;
-
-//   // Null masks
-//   ARROW_ASSIGN_OR_RAISE(
-//       auto null_masks,
-//       AllocateResizableBuffer(size_null_masks(kInitialRowsCapacity), pool_));
-//   null_masks_ = std::move(null_masks);
-//   memset(null_masks_->mutable_data(), 0, size_null_masks(kInitialRowsCapacity));
-
-//   // Offsets and rows
-//   if (!metadata.is_fixed_length) {
-//     ARROW_ASSIGN_OR_RAISE(
-//         auto offsets, AllocateResizableBuffer(size_offsets(kInitialRowsCapacity),
-//         pool_));
-//     offsets_ = std::move(offsets);
-//     memset(offsets_->mutable_data(), 0, size_offsets(kInitialRowsCapacity));
-//     reinterpret_cast<int32_t*>(offsets_->mutable_data())[0] = 0;
-
-//     ARROW_ASSIGN_OR_RAISE(
-//         auto rows,
-//         AllocateResizableBuffer(size_rows_varying_length(kInitialBytesCapacity),
-//         pool_));
-//     rows_ = std::move(rows);
-//     memset(rows_->mutable_data(), 0, size_rows_varying_length(kInitialBytesCapacity));
-//     bytes_capacity_ =
-//         size_rows_varying_length(kInitialBytesCapacity) - kPaddingForVectors;
-//   } else {
-//     ARROW_ASSIGN_OR_RAISE(
-//         auto rows,
-//         AllocateResizableBuffer(size_rows_fixed_length(kInitialRowsCapacity), pool_));
-//     rows_ = std::move(rows);
-//     memset(rows_->mutable_data(), 0, size_rows_fixed_length(kInitialRowsCapacity));
-//     bytes_capacity_ = size_rows_fixed_length(kInitialRowsCapacity) -
-//     kPaddingForVectors;
-//   }
-
-//   UpdateBufferPointers();
-
-//   rows_capacity_ = kInitialRowsCapacity;
-
-//   num_rows_ = 0;
-//   num_rows_for_has_any_nulls_ = 0;
-//   has_any_nulls_ = false;
-
-//   return Status::OK();
-// }
-
-// void RowBatchImpl::Clean() {
-//   num_rows_ = 0;
-//   num_rows_for_has_any_nulls_ = 0;
-//   has_any_nulls_ = false;
-
-//   if (!metadata_.is_fixed_length) {
-//     reinterpret_cast<int32_t*>(offsets_->mutable_data())[0] = 0;
-//   }
-// }
-
-// int64_t RowBatchImpl::size_null_masks(int64_t num_rows) const {
-//   return num_rows * metadata_.null_masks_bytes_per_row + kPaddingForVectors;
-// }
-
-// int64_t RowBatchImpl::size_offsets(int64_t num_rows) const {
-//   return (num_rows + 1) * sizeof(int32_t) + kPaddingForVectors;
-// }
-
-// int64_t RowBatchImpl::size_rows_fixed_length(int64_t num_rows) const {
-//   return num_rows * metadata_.fixed_length + kPaddingForVectors;
-// }
-
-// int64_t RowBatchImpl::size_rows_varying_length(int64_t num_bytes) const {
-//   return num_bytes + kPaddingForVectors;
-// }
-
-// void RowBatchImpl::UpdateBufferPointers() {
-//   buffers_[0] = null_masks_->mutable_data();
-//   if (metadata_.is_fixed_length) {
-//     buffers_[1] = rows_->mutable_data();
-//     buffers_[2] = nullptr;
-//   } else {
-//     buffers_[1] = offsets_->mutable_data();
-//     buffers_[2] = rows_->mutable_data();
-//   }
-// }
-
-// Status RowBatchImpl::ResizeFixedLengthBuffers(int64_t num_extra_rows) {
-//   if (rows_capacity_ >= num_rows_ + num_extra_rows) {
-//     return Status::OK();
-//   }
-
-//   int64_t rows_capacity_new = std::max(static_cast<int64_t>(1), 2 * rows_capacity_);
-//   while (rows_capacity_new < num_rows_ + num_extra_rows) {
-//     rows_capacity_new *= 2;
-//   }
-
-//   // Null masks
-//   RETURN_NOT_OK(null_masks_->Resize(size_null_masks(rows_capacity_new), false));
-//   memset(null_masks_->mutable_data() + size_null_masks(rows_capacity_), 0,
-//          size_null_masks(rows_capacity_new) - size_null_masks(rows_capacity_));
-
-//   // Either offsets or rows
-//   if (!metadata_.is_fixed_length) {
-//     RETURN_NOT_OK(offsets_->Resize(size_offsets(rows_capacity_new), false));
-//     memset(offsets_->mutable_data() + size_offsets(rows_capacity_), 0,
-//            size_offsets(rows_capacity_new) - size_offsets(rows_capacity_));
-//   } else {
-//     RETURN_NOT_OK(rows_->Resize(size_rows_fixed_length(rows_capacity_new), false));
-//     memset(rows_->mutable_data() + size_rows_fixed_length(rows_capacity_), 0,
-//            size_rows_fixed_length(rows_capacity_new) -
-//                size_rows_fixed_length(rows_capacity_));
-//     bytes_capacity_ = size_rows_fixed_length(rows_capacity_new) - kPaddingForVectors;
-//   }
-
-//   UpdateBufferPointers();
-
-//   rows_capacity_ = rows_capacity_new;
-
-//   return Status::OK();
-// }
-
-// Status RowBatchImpl::ResizeOptionalVaryingLengthBuffer(int64_t num_extra_bytes) {
-//   int64_t num_bytes = offsets()[num_rows_];
-//   if (bytes_capacity_ >= num_bytes + num_extra_bytes || metadata_.is_fixed_length) {
-//     return Status::OK();
-//   }
-
-//   int64_t bytes_capacity_new = std::max(static_cast<int64_t>(1), 2 * bytes_capacity_);
-//   while (bytes_capacity_new < num_bytes + num_extra_bytes) {
-//     bytes_capacity_new *= 2;
-//   }
-
-//   RETURN_NOT_OK(rows_->Resize(size_rows_varying_length(bytes_capacity_new), false));
-//   memset(rows_->mutable_data() + size_rows_varying_length(bytes_capacity_), 0,
-//          size_rows_varying_length(bytes_capacity_new) -
-//              size_rows_varying_length(bytes_capacity_));
-
-//   UpdateBufferPointers();
-
-//   bytes_capacity_ = bytes_capacity_new;
-
-//   return Status::OK();
-// }
-
-// Status RowBatchImpl::AppendSelectionFrom(const RowBatchImpl& from,
-//                                          int32_t num_rows_to_append,
-//                                          const uint16_t* source_row_ids) {
-//   DCHECK(metadata_.is_compatible(from.metadata()));
-
-//   RETURN_NOT_OK(ResizeFixedLengthBuffers(num_rows_to_append));
-
-//   if (!metadata_.is_fixed_length) {
-//     // Varying-length rows
-//     auto from_offsets = reinterpret_cast<const int32_t*>(from.offsets_->data());
-//     auto to_offsets = reinterpret_cast<int32_t*>(offsets_->mutable_data());
-//     int32_t total_length = to_offsets[num_rows_];
-//     int32_t total_length_to_append = 0;
-//     for (int32_t i = 0; i < num_rows_to_append; ++i) {
-//       uint16_t row_id = source_row_ids ? source_row_ids[i] : i;
-//       int32_t length = from_offsets[row_id + 1] - from_offsets[row_id];
-//       total_length_to_append += length;
-//       to_offsets[num_rows_ + i + 1] = total_length + total_length_to_append;
-//     }
-
-//     RETURN_NOT_OK(ResizeOptionalVaryingLengthBuffer(total_length_to_append));
-
-//     const uint8_t* src = from.rows_->data();
-//     uint8_t* dst = rows_->mutable_data() + total_length;
-//     for (int32_t i = 0; i < num_rows_to_append; ++i) {
-//       uint16_t row_id = source_row_ids ? source_row_ids[i] : i;
-//       int32_t length = from_offsets[row_id + 1] - from_offsets[row_id];
-//       auto src64 = reinterpret_cast<const uint64_t*>(src + from_offsets[row_id]);
-//       auto dst64 = reinterpret_cast<uint64_t*>(dst);
-//       for (int32_t j = 0; j < bit_util::CeilDiv(length, 8); ++j) {
-//         dst64[j] = src64[j];
-//       }
-//       dst += length;
-//     }
-//   } else {
-//     // Fixed-length rows
-//     const uint8_t* src = from.rows_->data();
-//     uint8_t* dst = rows_->mutable_data() + num_rows_ * metadata_.fixed_length;
-//     for (int32_t i = 0; i < num_rows_to_append; ++i) {
-//       uint16_t row_id = source_row_ids ? source_row_ids[i] : i;
-//       int32_t length = metadata_.fixed_length;
-//       auto src64 = reinterpret_cast<const uint64_t*>(src + length * row_id);
-//       auto dst64 = reinterpret_cast<uint64_t*>(dst);
-//       for (int32_t j = 0; j < bit_util::CeilDiv(length, 8); ++j) {
-//         dst64[j] = src64[j];
-//       }
-//       dst += length;
-//     }
-//   }
-
-//   // Null masks
-//   int32_t byte_length = metadata_.null_masks_bytes_per_row;
-//   uint64_t dst_byte_offset = num_rows_ * byte_length;
-//   const uint8_t* src_base = from.null_masks_->data();
-//   uint8_t* dst_base = null_masks_->mutable_data();
-//   for (int32_t i = 0; i < num_rows_to_append; ++i) {
-//     int32_t row_id = source_row_ids ? source_row_ids[i] : i;
-//     int64_t src_byte_offset = row_id * byte_length;
-//     const uint8_t* src = src_base + src_byte_offset;
-//     uint8_t* dst = dst_base + dst_byte_offset;
-//     for (int32_t ibyte = 0; ibyte < byte_length; ++ibyte) {
-//       dst[ibyte] = src[ibyte];
-//     }
-//     dst_byte_offset += byte_length;
-//   }
-
-//   num_rows_ += num_rows_to_append;
-
-//   return Status::OK();
-// }
-
-// Status RowBatchImpl::AppendEmpty(int32_t num_rows_to_append,
-//                                  int32_t num_extra_bytes_to_append) {
-//   RETURN_NOT_OK(ResizeFixedLengthBuffers(num_rows_to_append));
-//   RETURN_NOT_OK(ResizeOptionalVaryingLengthBuffer(num_extra_bytes_to_append));
-//   num_rows_ += num_rows_to_append;
-//   if (metadata_.row_alignment > 1 || metadata_.string_alignment > 1) {
-//     memset(rows_->mutable_data(), 0, bytes_capacity_);
-//   }
-//   return Status::OK();
-// }
-
-// bool RowBatchImpl::has_any_nulls(const LightContext* ctx) const {
-//   if (has_any_nulls_) {
-//     return true;
-//   }
-//   if (num_rows_for_has_any_nulls_ < num_rows_) {
-//     auto size_per_row = metadata().null_masks_bytes_per_row;
-//     has_any_nulls_ = !util::bit_util::are_all_bytes_zero(
-//         ctx->hardware_flags, null_masks() + size_per_row * num_rows_for_has_any_nulls_,
-//         static_cast<int32_t>(size_per_row * (num_rows_ -
-//         num_rows_for_has_any_nulls_)));
-//     num_rows_for_has_any_nulls_ = num_rows_;
-//   }
-//   return has_any_nulls_;
-// }
-
-}  // namespace quiver::row
+Status RowQueueAppendingProducer::Create(
+    RowSchema* schema, Sink* sink, std::unique_ptr<RowQueueAppendingProducer>* out) {
+  auto impl = std::make_unique<RowQueueAppendingProducerImpl>(schema, sink);
+  QUIVER_RETURN_NOT_OK(impl->Initialize());
+  *out = std::move(impl);
+  return Status::OK();
+}

@@ -12,6 +12,7 @@ set(QUIVER_VERSION_MINOR "${quiver_VERSION_MINOR}")
 set(QUIVER_VERSION_PATCH "${quiver_VERSION_PATCH}")
 
 option(QUIVER_BUILD_TESTS "Build tests" OFF)
+option(QUIVER_BUILD_BENCHMARKS "Build benchmarks" OFF)
 option(QUIVER_BUNDLE "Create bundled quiver.h and quiver.c" OFF)
 option(QUIVER_BUILD_ID "A string identifying this build" OFF)
 
@@ -41,6 +42,10 @@ endif()
 if(QUIVER_BUILD_TESTS)
     find_package(GTest CONFIG REQUIRED)
     enable_testing()
+endif()
+
+if(QUIVER_BUILD_BENCHMARKS)
+    find_package(benchmark REQUIRED)
 endif()
 
 # Have to enable clang-tidy after building 3rd party libs
@@ -109,6 +114,12 @@ if(QUIVER_BUILD_TESTS)
     gtest_discover_tests(test_test)
     gtest_discover_tests(utility_test)
     gtest_discover_tests(store_test)
+endif()
+
+if(QUIVER_BUILD_BENCHMARKS)
+    add_executable(row_benchmarks src/quiver/row/row_benchmarks.cc)
+
+    target_link_libraries(row_benchmarks benchmark::benchmark)
 endif()
 
 if(QUIVER_CODE_COVERAGE)
