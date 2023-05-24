@@ -36,21 +36,21 @@ struct FieldDescriptor {
   std::string format;
   std::string name;
   std::string metadata;
-  bool nullable;
-  bool dict_indices_ordered;
-  bool map_keys_sorted;
-  int32_t num_children;
+  bool nullable = false;
+  bool dict_indices_ordered = false;
+  bool map_keys_sorted = false;
+  int32_t num_children = 0;
 
   // The index of the type, in the schema
-  int32_t index;
-  LayoutKind layout;
+  int32_t index = 0;
+  LayoutKind layout = LayoutKind::kFlat;
   // This is the second buffer which is the data values for fixed types and the offsets
   // buffer for variable types.
   //
   // This will be 0 for bool buffers
   // This will be -1 for types without a second buffer (null, fixed width list, struct)
-  int data_width_bytes;
-  SimpleSchema* schema;
+  int data_width_bytes = 0;
+  SimpleSchema* schema = nullptr;
 
   // Default shallow equality
   auto operator<=>(const FieldDescriptor&) const = default;

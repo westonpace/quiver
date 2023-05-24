@@ -59,6 +59,7 @@ add_library(
     src/quiver/core/array.cc
     src/quiver/core/io.cc
     src/quiver/store/mmap_store.cc
+    src/quiver/util/arrow_util.cc
     src/quiver/util/cpu_info.cc
     src/quiver/util/logging_p.cc
     src/quiver/util/memory.cc
@@ -102,6 +103,7 @@ if(QUIVER_BUILD_TESTS)
     add_executable(test_test src/quiver/test_test.cc)
     add_executable(
         utility_test
+        src/quiver/util/arrow_util_test.cc
         src/quiver/util/cpu_info_test.cc
         src/quiver/util/memory_test.cc)
     add_executable(

@@ -2,9 +2,11 @@
 
 #include "quiver/core/array.h"
 
+#include <array>
 #include <cstring>
 #include <limits>
 #include <sstream>
+#include <string_view>
 
 #include "quiver/util/bit_util.h"
 #include "quiver/util/finally.h"
@@ -215,7 +217,8 @@ Status DoImportSchemaField(const ArrowSchema& schema, SimpleSchema* out) {
 
 FieldDescriptor& FieldDescriptor::child(int index) const {
   DCHECK_GE(index, 0);
-  return schema->types[this->index + index];
+  int64_t type_index = this->index;
+  return schema->types[type_index + index];
 }
 
 bool SimpleSchema::Equals(const SimpleSchema& other) const {
@@ -383,10 +386,10 @@ class ImportedBatch : public ReadOnlyBatch {
     return Status::OK();
   }
 
-  const SimpleSchema* schema_;
+  const SimpleSchema* schema_ = nullptr;
   std::vector<ReadOnlyArray> arrays_;
   ArrowArray* backing_array_ = nullptr;
-  int64_t length_;
+  int64_t length_ = 0;
 
   friend Status ImportBatch(ArrowArray* array, SimpleSchema* schema,
                             std::unique_ptr<ReadOnlyBatch>* out);

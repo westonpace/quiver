@@ -254,7 +254,7 @@ class [[nodiscard]] Status : public util::EqualityComparable<Status>,
   /// \brief Return the status detail attached to this message.
   [[nodiscard]] const std::shared_ptr<StatusDetail>& detail() const {
     static const std::shared_ptr<StatusDetail> no_detail = nullptr;
-    return (state_ == nullptr) ? state_->detail : no_detail;
+    return (state_ != nullptr) ? state_->detail : no_detail;
   }
 
   /// \brief Return a new Status copying the existing status, but
