@@ -102,6 +102,12 @@ std::string Status::ToString() const {
 
 void Status::Abort() const { Abort(std::string()); }
 
+void Status::AbortNotOk() const {
+  if (!ok()) {
+    Abort();
+  }
+}
+
 void Status::Abort(const std::string& message) const {
   std::cerr << "-- Arrow Fatal Error --\n";
   if (!message.empty()) {

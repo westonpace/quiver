@@ -40,12 +40,12 @@ if(QUIVER_CODE_COVERAGE)
 endif()
 
 if(QUIVER_BUILD_TESTS)
-    find_package(arrow CONFIG REQUIRED)
     find_package(GTest CONFIG REQUIRED)
     enable_testing()
 endif()
 
 if(QUIVER_BUILD_BENCHMARKS)
+    find_package(arrow CONFIG REQUIRED)
     find_package(benchmark CONFIG REQUIRED)
 endif()
 
@@ -58,6 +58,7 @@ add_library(
     src/quiver/lib.cc
     src/quiver/core/array.cc
     src/quiver/core/io.cc
+    src/quiver/row/row_p.cc
     src/quiver/store/mmap_store.cc
     src/quiver/util/arrow_util.cc
     src/quiver/util/cpu_info.cc
@@ -97,6 +98,19 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     if(QUIVER_CODE_COVERAGE)
         append_coverage_compiler_flags_to_target(quiver)
     endif()
+# else()
+#     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+#     target_compile_options(
+#         quiver
+#         PRIVATE
+#         -march=native)
+#     elseif(CMAKE_C_COMPILER_ID STREQUAL "AppleClang" OR
+#     CMAKE_C_COMPILER_ID STREQUAL "Clang")
+#     target_compile_options(
+#         quiver
+#         PRIVATE
+#         -march=native)
+#     endif()
 endif()
 
 if(QUIVER_BUILD_TESTS)
@@ -121,9 +135,18 @@ if(QUIVER_BUILD_TESTS)
 endif()
 
 if(QUIVER_BUILD_BENCHMARKS)
+
+    add_library(
+        quiver_benchutil
+        STATIC
+        src/quiver/benchutil/datagen.cc)
+
+    target_include_directories(quiver_benchutil PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(quiver_benchutil PRIVATE Arrow::arrow_shared quiver)
+
     add_executable(row_benchmarks src/quiver/row/row_benchmarks.cc)
 
-    target_link_libraries(row_benchmarks Arrow::arrow_shared benchmark::benchmark)
+    target_link_libraries(row_benchmarks quiver quiver_benchutil Arrow::arrow_shared benchmark::benchmark)
 endif()
 
 if(QUIVER_CODE_COVERAGE)

@@ -2,16 +2,21 @@
 
 #include "quiver/core/io.h"
 
+#include <limits>
 #include <span>
+
+#include "quiver/util/logging_p.h"
 
 namespace quiver {
 
-Sink FromFixedSizeSpan(std::span<uint8_t> span) {
-  return Sink(span.data(), span.size(),
-              [start = span.data(), len = static_cast<int32_t>(span.size())](uint8_t* buf, int32_t* remaining) {
-                *remaining = len;
-                return start;
-              });
+Sink Sink::FromFixedSizeSpan(std::span<uint8_t> span) {
+  QUIVER_CHECK_LE(span.size(), std::numeric_limits<int32_t>::max());
+  return {span.data(), static_cast<int32_t>(span.size()),
+          [start = span.data(), len = static_cast<int32_t>(span.size())](
+              uint8_t*, int32_t* remaining) {
+            *remaining = len;
+            return start;
+          }};
 }
 
 }  // namespace quiver

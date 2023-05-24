@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -9,9 +11,11 @@ namespace quiver {
 
 class Sink {
  public:
-  Sink(uint8_t* initial_buf, int32_t initial_len, std::function<uint8_t*(uint8_t*, int32_t*)> swap) : itr_(initial_buf), remaining_(initial_len), swap_(std::move(swap)) {}
+  Sink(uint8_t* initial_buf, int32_t initial_len,
+       std::function<uint8_t*(uint8_t*, int32_t*)> swap)
+      : itr_(initial_buf), remaining_(initial_len), swap_(std::move(swap)) {}
   void CopyInto(const uint8_t* src, int32_t len) {
-    while (len >= 0) {
+    while (len > 0) {
       int32_t to_write = std::min(len, remaining_);
       len -= to_write;
       remaining_ -= to_write;
@@ -36,9 +40,9 @@ class Sink {
   static Sink FromFixedSizeSpan(std::span<uint8_t> span);
 
  private:
-  std::function<uint8_t*(uint8_t*, int32_t*)> swap_;
   uint8_t* itr_;
   int32_t remaining_;
+  std::function<uint8_t*(uint8_t*, int32_t*)> swap_;
 };
 
 class OutputStream {

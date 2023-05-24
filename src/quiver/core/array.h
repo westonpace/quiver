@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -201,7 +203,7 @@ class Batch : public FixedBatch {
   virtual void ResizeArrayBytes(int32_t index, int64_t num_bytes) = 0;
 };
 
-static Status ImportBatch(ArrowArray* array, SimpleSchema* schema,
-                          std::unique_ptr<ReadOnlyBatch>* out);
+Status ImportBatch(ArrowArray* array, SimpleSchema* schema,
+                   std::unique_ptr<ReadOnlyBatch>* out);
 
 }  // namespace quiver

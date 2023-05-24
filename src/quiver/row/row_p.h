@@ -100,8 +100,9 @@ struct RowSchema {
 
 class RowQueueAppendingProducer {
  public:
+  virtual ~RowQueueAppendingProducer() = default;
   virtual Status Append(const ReadOnlyBatch& batch) = 0;
-  static Status Create(RowSchema* row_schema, Sink* sink,
+  static Status Create(const RowSchema* row_schema, Sink* sink,
                        std::unique_ptr<RowQueueAppendingProducer>* out);
 };
 

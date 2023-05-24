@@ -2,12 +2,16 @@
 
 #pragma once
 
+#include <arrow/status.h>
+
 #include <cstdint>
 
 #include "quiver/core/arrow.h"
-
+#include "quiver/util/arrow_util.h"
 namespace quiver::bench {
 
-ArrowArray GenFlatData(int64_t target_num_bytes);
+void assert_ok(const arrow::Status& status);
+const std::shared_ptr<ArrowSchema>& GetFlatDataSchema();
+util::OwnedArrowArray GenFlatData(int32_t target_num_bytes);
 
-}
+}  // namespace quiver::bench

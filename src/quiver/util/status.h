@@ -275,6 +275,7 @@ class [[nodiscard]] Status : public util::EqualityComparable<Status>,
 
   [[noreturn]] void Abort() const;
   [[noreturn]] void Abort(const std::string& message) const;
+  void AbortNotOk() const;
 
   void AddContextLine(const char* filename, int line, const char* expr);
 

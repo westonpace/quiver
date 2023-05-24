@@ -63,8 +63,8 @@ constexpr int kDefaultDecimalBitwidth = 128;
 Status CopyArrowSchema(const ArrowSchema& schema, FieldDescriptor* descriptor,
                        int index) {
   descriptor->format = std::string(schema.format);
-  descriptor->metadata = std::string(schema.metadata);
-  descriptor->name = std::string(schema.name);
+  descriptor->metadata = schema.metadata == nullptr ? "" : std::string(schema.metadata);
+  descriptor->name = schema.name == nullptr ? "" : std::string(schema.name);
   descriptor->num_children = static_cast<int32_t>(schema.n_children);
   if (schema.dictionary != nullptr) {
     descriptor->num_children++;
@@ -226,7 +226,11 @@ bool SimpleSchema::Equals(const SimpleSchema& other) const {
 }
 
 Status SimpleSchema::ImportFromArrow(ArrowSchema* schema, SimpleSchema* out) {
-  util::Finally release_schema([schema] { schema->release(schema); });
+  util::Finally release_schema([schema] {
+    if (schema != nullptr && schema->release != nullptr) {
+      schema->release(schema);
+    }
+  });
   if (std::strncmp(schema->format, "+s", 2) != 0) {
     return Status::Invalid("Top level schema must be a struct type");
   }
@@ -245,7 +249,7 @@ Status SimpleSchema::ImportFromArrow(ArrowSchema* schema, SimpleSchema* out) {
     QUIVER_RETURN_NOT_OK(DoImportSchemaField(*schema->children[i], out));
     out->top_level_types[i] = out->types[top_level_index];
   }
-  DCHECK_EQ(out->types.size(), total_num_fields);
+  DCHECK_EQ(static_cast<int32_t>(out->types.size()), total_num_fields);
   return Status::OK();
 }
 
@@ -261,7 +265,7 @@ Status GetBufferOrEmptySpan(const ArrowArray& array, int index, int64_t length, 
   if (buff_or_null == nullptr) {
     *out = {};
   } else if (width == 0) {
-    *out = std::span<T>(buff_or_null, bit_util::CeilDiv(length, 8));
+    *out = std::span<T>(buff_or_null, bit_util::CeilDiv(length, static_cast<int64_t>(8)));
   } else {
     *out = std::span<T>(buff_or_null, length * width);
   }
@@ -272,7 +276,7 @@ class ImportedBatch : public ReadOnlyBatch {
  public:
   [[nodiscard]] const ReadOnlyArray& array(int32_t index) const override {
     DCHECK_GE(index, 0);
-    DCHECK_LT(index, arrays_.size());
+    DCHECK_LT(index, static_cast<int32_t>(arrays_.size()));
     return arrays_[index];
   }
 
@@ -301,7 +305,7 @@ class ImportedBatch : public ReadOnlyBatch {
     return *this;
   }
 
-  ~ImportedBatch() {
+  ~ImportedBatch() override {
     if ((backing_array_ != nullptr) && backing_array_->release != nullptr) {
       backing_array_->release(backing_array_);
     }
@@ -312,8 +316,6 @@ class ImportedBatch : public ReadOnlyBatch {
     if (array.offset != 0) {
       return Status::NotImplemented("support for offsets in imported arrays");
     }
-    auto index = static_cast<int32_t>(arrays_.size());
-
     int64_t length = array.length;
     std::span<const uint8_t> validity;
 
@@ -405,9 +407,12 @@ Status ImportBatch(ArrowArray* array, SimpleSchema* schema,
     return Status::Invalid("Imported array had ", array->n_children, " but expected ",
                            schema->num_fields(), " according to the schema");
   }
-  if (array->n_buffers != 0) {
+  if (array->n_buffers != 1) {
     return Status::Invalid(
         "Top level array must be a struct array (which should have no buffers)");
+  }
+  if (array->buffers[0] != nullptr) {
+    return Status::NotImplemented("Nulls in the top-level struct array");
   }
   imported_batch->backing_array_ = array;
   imported_batch->schema_ = schema;

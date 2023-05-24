@@ -95,7 +95,6 @@ Status RowSchema::Initialize(const SimpleSchema& schema) {
   is_fixed_length = true;
 
   column_offsets.resize(num_cols);
-  int32_t num_varbinary_cols = 0;
   int32_t offset_within_row = 0;
   for (int32_t i = 0; i < num_cols; ++i) {
     const FieldDescriptor& col = schema.top_level_types[i];
@@ -154,6 +153,9 @@ class FlatEncoder {
   }
 
   bool EncodeValid() {
+    if (validity_ == nullptr) {
+      return true;
+    }
     bool is_valid = (*validity_ & bitmask_) != 0;
     bitmask_ <<= 1;
     if (bitmask_ == 0) {
@@ -162,6 +164,8 @@ class FlatEncoder {
     }
     return is_valid;
   }
+
+  bool MayHaveNulls() { return validity_ != nullptr; }
 
  private:
   const FieldDescriptor& field_;
@@ -186,8 +190,6 @@ class ContiguousListEncoder {
     offsets++;
   }
 
-  bool EncodeValid() {}
-
  private:
   const OffsetType* offsets;
   const uint8_t* data;
@@ -197,7 +199,7 @@ class ContiguousListEncoder {
 
 class RowQueueAppendingProducerImpl : public RowQueueAppendingProducer {
  public:
-  RowQueueAppendingProducerImpl(RowSchema* schema, Sink* sink)
+  RowQueueAppendingProducerImpl(const RowSchema* schema, Sink* sink)
       : schema_(schema), sink_(sink) {}
 
   Status Initialize() {
@@ -208,6 +210,7 @@ class RowQueueAppendingProducerImpl : public RowQueueAppendingProducer {
         case LayoutKind::kFlat:
           flat_col_indices.push_back(static_cast<int32_t>(field_idx));
           flat_encoders.emplace_back(field);
+          break;
         default:
           return Status::Invalid("No row based encoder yet provided for layout ",
                                  layout::to_string(field.layout));
@@ -220,10 +223,10 @@ class RowQueueAppendingProducerImpl : public RowQueueAppendingProducer {
     // Prepare
     for (std::size_t flat_idx = 0; flat_idx < flat_col_indices.size(); flat_idx++) {
       int32_t field_idx = flat_col_indices[flat_idx];
-      const FieldDescriptor& field = batch.schema()->top_level_types[field_idx];
-      flat_encoders[flat_idx].Prepare(batch.array(field_idx), field);
+      flat_encoders[flat_idx].Prepare(batch.array(field_idx));
     }
-    for (int64_t row_idx = 0; row_idx < batch.length(); row_idx++) {
+    int64_t batch_length = batch.length();
+    for (int64_t row_idx = 0; row_idx < batch_length; row_idx++) {
       // Encode values
       for (auto& flat_encoder : flat_encoders) {
         flat_encoder.EncodeValue(sink_);
@@ -249,10 +252,11 @@ class RowQueueAppendingProducerImpl : public RowQueueAppendingProducer {
   }
 
  private:
-  RowSchema* schema_;
+  const RowSchema* schema_;
   Sink* sink_;
   std::vector<int32_t> flat_col_indices;
   std::vector<FlatEncoder> flat_encoders;
+  std::vector<FlatEncoder> flat_encoders_may_have_nulls;
   std::vector<int32_t> clist_int32_indices;
   std::vector<ContiguousListEncoder<Int32ContiguousListArray, int32_t>>
       clist_int32_encoders;
@@ -262,9 +266,12 @@ class RowQueueAppendingProducerImpl : public RowQueueAppendingProducer {
 };
 
 Status RowQueueAppendingProducer::Create(
-    RowSchema* schema, Sink* sink, std::unique_ptr<RowQueueAppendingProducer>* out) {
+    const RowSchema* schema, Sink* sink,
+    std::unique_ptr<RowQueueAppendingProducer>* out) {
   auto impl = std::make_unique<RowQueueAppendingProducerImpl>(schema, sink);
   QUIVER_RETURN_NOT_OK(impl->Initialize());
   *out = std::move(impl);
   return Status::OK();
 }
+
+}  // namespace quiver::row
