@@ -40,12 +40,13 @@ if(QUIVER_CODE_COVERAGE)
 endif()
 
 if(QUIVER_BUILD_TESTS)
+    find_package(arrow CONFIG REQUIRED)
     find_package(GTest CONFIG REQUIRED)
     enable_testing()
 endif()
 
 if(QUIVER_BUILD_BENCHMARKS)
-    find_package(benchmark REQUIRED)
+    find_package(benchmark CONFIG REQUIRED)
 endif()
 
 # Have to enable clang-tidy after building 3rd party libs
@@ -56,6 +57,7 @@ add_library(
     STATIC
     src/quiver/lib.cc
     src/quiver/core/array.cc
+    src/quiver/core/io.cc
     src/quiver/store/mmap_store.cc
     src/quiver/util/cpu_info.cc
     src/quiver/util/logging_p.cc
@@ -119,7 +121,7 @@ endif()
 if(QUIVER_BUILD_BENCHMARKS)
     add_executable(row_benchmarks src/quiver/row/row_benchmarks.cc)
 
-    target_link_libraries(row_benchmarks benchmark::benchmark)
+    target_link_libraries(row_benchmarks Arrow::arrow_shared benchmark::benchmark)
 endif()
 
 if(QUIVER_CODE_COVERAGE)

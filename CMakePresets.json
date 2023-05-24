@@ -32,6 +32,7 @@
         "cacheVariables": {
           "CMAKE_BUILD_TYPE": "Debug",
           "QUIVER_BUILD_TESTS": "ON",
+          "QUIVER_BUILD_BENCHMARKS": "ON",
           "QUIVER_CODE_COVERAGE": "ON",
           "BUILD_SHARED_LIBS": "ON"
         }

@@ -9,7 +9,7 @@ namespace quiver {
 
 class Sink {
  public:
-  Sink(std::function<uint8_t*(uint8_t*, int32_t*)> swap) : swap_(std::move(swap)) {}
+  Sink(uint8_t* initial_buf, int32_t initial_len, std::function<uint8_t*(uint8_t*, int32_t*)> swap) : itr_(initial_buf), remaining_(initial_len), swap_(std::move(swap)) {}
   void CopyInto(const uint8_t* src, int32_t len) {
     while (len >= 0) {
       int32_t to_write = std::min(len, remaining_);
@@ -30,6 +30,10 @@ class Sink {
       itr_ = swap_(itr_, &remaining_);
     }
   }
+
+  // Creates a sink that writes to a buffer and wraps
+  // if it ever needs to swap
+  static Sink FromFixedSizeSpan(std::span<uint8_t> span);
 
  private:
   std::function<uint8_t*(uint8_t*, int32_t*)> swap_;

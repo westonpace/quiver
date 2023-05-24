@@ -1,5 +1,8 @@
 #include <benchmark/benchmark.h>
 
+#include <arrow/array/builder_primitive.h>
+#include <arrow/record_batch.h>
+
 static void BM_StringCreation(benchmark::State& state) {
   for (auto _ : state) std::string empty_string;
 }
