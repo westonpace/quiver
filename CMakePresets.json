@@ -10,6 +10,11 @@
       "name": "devBuild",
       "configurePreset": "dev",
       "configuration": "Debug"
+    },
+    {
+      "name": "profile",
+      "configuration": "Release",
+      "configurePreset": "profile"
     }
   ],
     "configurePresets": [
@@ -34,6 +39,21 @@
           "QUIVER_BUILD_TESTS": "ON",
           "QUIVER_BUILD_BENCHMARKS": "ON",
           "QUIVER_CODE_COVERAGE": "ON",
+          "BUILD_SHARED_LIBS": "ON"
+        }
+      },
+      {
+        "name": "profile",
+        "inherits": [
+          "default"
+        ],
+        "displayName": "Release mode with benchmarks and debug symbols",
+        "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "cacheVariables": {
+          "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+          "QUIVER_BUILD_TESTS": "OFF",
+          "QUIVER_BUILD_BENCHMARKS": "ON",
+          "QUIVER_CODE_COVERAGE": "OFF",
           "BUILD_SHARED_LIBS": "ON"
         }
       }

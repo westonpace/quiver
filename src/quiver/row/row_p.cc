@@ -23,6 +23,76 @@
 
 namespace quiver::row {
 
+/// Description of the data stored in a RowBatch
+///
+/// Each row (with N fixed-length columns and M variable-length columns) is stored in the
+/// following form:
+///
+/// | FIX_0 | FIX_1 | . | FIX_N | VALID_0 | VALID_LOG_2(N) | VAR_0 | VAR_1 | . | VAR_M |
+///
+/// FIX_x is the fixed-length portion of the column value
+/// VALID_x is the validity-bitmap of the row
+/// VAR_x is the variable-length portion of the column value
+///
+/// Each value is aligned as follows:
+///
+/// A fixed value, that is a bit, is packed into a byte with no alignment
+/// A fixed value, that is a power of 2 # of bytes, has no padding
+/// A fixed value, that is a non-power of 2 # of bytes, is padded to string_alignment
+/// Variable length values are padded to string_alignment
+///
+/// TODO: Why pad bytes to string_alignment?  Does it matter?
+///
+/// Each row is aligned to row_alignment
+struct RowSchema {
+  /// \brief True if there are no variable length columns in the table
+  bool is_fixed_length = true;
+
+  /// The size of the fixed portion of the row
+  ///
+  /// If this is the entire row then this will be a multiple of row_alignment
+  ///
+  /// If there are any varlength columns then this will be a multiple of string_alignment
+  int32_t fixed_length = 0;
+
+  /// Fixed number of bytes per row that are used to encode null masks.
+  /// Null masks indicate for a single row which of its columns are null.
+  /// Nth bit in the sequence of bytes assigned to a row represents null
+  /// information for Nth field according to the order in which they are encoded.
+  int32_t null_masks_bytes_per_row = 0;
+
+  int32_t null_masks_offset = 0;
+
+  /// Power of 2. Every row will start at an offset aligned to that number of bytes.
+  int32_t row_alignment;
+
+  /// Power of 2. Must be no greater than row alignment.
+  /// Every non-power-of-2 binary field and every varbinary field bytes
+  /// will start aligned to that number of bytes.
+  int32_t string_alignment;
+
+  const SimpleSchema* schema = nullptr;
+
+  /// Offsets within a row to fields in their encoding order.
+  std::vector<int32_t> column_offsets;
+
+  RowSchema(int32_t row_alignment, int32_t string_alignment)
+      : row_alignment(row_alignment), string_alignment(string_alignment) {}
+
+  Status Initialize(const SimpleSchema& schema);
+
+  [[nodiscard]] int32_t encoded_field_offset(int32_t icol) const {
+    return column_offsets[icol];
+  }
+
+  [[nodiscard]] int32_t num_cols() const { return schema->num_fields(); }
+
+  [[nodiscard]] int32_t num_varbinary_cols() const;
+
+  /// \brief True if `other` is based on the same schema
+  [[nodiscard]] bool IsCompatible(const RowSchema& other) const;
+};
+
 int32_t RowSchema::num_varbinary_cols() const {
   int32_t result = 0;
   for (const auto& field : schema->types) {
@@ -98,7 +168,6 @@ Status RowSchema::Initialize(const SimpleSchema& schema) {
   int32_t offset_within_row = 0;
   for (int32_t i = 0; i < num_cols; ++i) {
     const FieldDescriptor& col = schema.top_level_types[i];
-    offset_within_row += PaddingNeeded(offset_within_row, string_alignment, col);
     column_offsets[i] = offset_within_row;
     is_fixed_length &= !layout::is_variable_length(col.layout);
     if (col.data_width_bytes == 0) {
@@ -109,21 +178,9 @@ Status RowSchema::Initialize(const SimpleSchema& schema) {
     }
   }
 
-  if (is_fixed_length) {
-    fixed_length =
-        offset_within_row + bit_util::PaddingNeededPwr2(offset_within_row, row_alignment);
-  } else {
-    fixed_length = offset_within_row +
-                   bit_util::PaddingNeededPwr2(offset_within_row, string_alignment);
-  }
+  null_masks_bytes_per_row = bit_util::CeilDiv(num_cols, 8);
 
-  // We set the number of bytes per row storing null masks of individual key columns
-  // to be a power of two. This is not required. It could be also set to the minimal
-  // number of bytes required for a given number of bits (one bit per column).
-  null_masks_bytes_per_row = 1;
-  while (static_cast<int32_t>(null_masks_bytes_per_row * 8) < num_cols) {
-    null_masks_bytes_per_row *= 2;
-  }
+  fixed_length = offset_within_row + null_masks_bytes_per_row;
 
   return Status::OK();
 }
@@ -136,7 +193,8 @@ Status RowSchema::Initialize(const SimpleSchema& schema) {
 
 class FlatEncoder {
  public:
-  FlatEncoder(const FieldDescriptor& field) : field_(field) {
+  FlatEncoder(const FieldDescriptor& field)
+      : field_(field), validity_(nullptr), values_(nullptr), bitmask_(1) {
     width_ = field_.data_width_bytes;
   }
 
@@ -147,7 +205,7 @@ class FlatEncoder {
     bitmask_ = 1;
   }
 
-  void EncodeValue(Sink* sink) {
+  void EncodeValue(StreamSink* sink) {
     sink->CopyInto(values_, width_);
     values_ += width_;
   }
@@ -185,7 +243,7 @@ class ContiguousListEncoder {
     bitmask = 1;
   }
 
-  void EncodeOffset(Sink* sink) {
+  void EncodeOffset(StreamSink* sink) {
     sink->CopyInto(offsets, sizeof(OffsetType));
     offsets++;
   }
@@ -199,13 +257,13 @@ class ContiguousListEncoder {
 
 class RowQueueAppendingProducerImpl : public RowQueueAppendingProducer {
  public:
-  RowQueueAppendingProducerImpl(const RowSchema* schema, Sink* sink)
-      : schema_(schema), sink_(sink) {}
+  RowQueueAppendingProducerImpl(RowSchema schema, StreamSink* sink)
+      : schema_(std::move(schema)), sink_(sink) {}
 
   Status Initialize() {
-    for (std::size_t field_idx = 0; field_idx < schema_->schema->top_level_types.size();
+    for (std::size_t field_idx = 0; field_idx < schema_.schema->top_level_types.size();
          field_idx++) {
-      const auto& field = schema_->schema->top_level_types[field_idx];
+      const auto& field = schema_.schema->top_level_types[field_idx];
       switch (field.layout) {
         case LayoutKind::kFlat:
           flat_col_indices.push_back(static_cast<int32_t>(field_idx));
@@ -252,8 +310,8 @@ class RowQueueAppendingProducerImpl : public RowQueueAppendingProducer {
   }
 
  private:
-  const RowSchema* schema_;
-  Sink* sink_;
+  RowSchema schema_;
+  StreamSink* sink_;
   std::vector<int32_t> flat_col_indices;
   std::vector<FlatEncoder> flat_encoders;
   std::vector<FlatEncoder> flat_encoders_may_have_nulls;
@@ -266,9 +324,141 @@ class RowQueueAppendingProducerImpl : public RowQueueAppendingProducer {
 };
 
 Status RowQueueAppendingProducer::Create(
-    const RowSchema* schema, Sink* sink,
+    const SimpleSchema* schema, StreamSink* sink,
     std::unique_ptr<RowQueueAppendingProducer>* out) {
-  auto impl = std::make_unique<RowQueueAppendingProducerImpl>(schema, sink);
+  RowSchema row_schema(sizeof(int64_t), sizeof(int64_t));
+  QUIVER_RETURN_NOT_OK(row_schema.Initialize(*schema));
+  auto impl =
+      std::make_unique<RowQueueAppendingProducerImpl>(std::move(row_schema), sink);
+  QUIVER_RETURN_NOT_OK(impl->Initialize());
+  *out = std::move(impl);
+  return Status::OK();
+}
+
+class FlatDecoder {
+ public:
+  FlatDecoder(const FieldDescriptor* field, int32_t field_idx)
+      : field_(field),
+        field_index_(field_idx),
+        values_itr_(nullptr),
+        validity_itr_(nullptr),
+        validity_bit_mask_(1) {}
+
+  int32_t fixed_width() const { return field_->data_width_bytes; }
+
+  void Prepare(int32_t num_rows, Batch* out) {
+    int num_validity_bytes = bit_util::CeilDiv(num_rows, 8);
+    out->ResizeBufferBytes(field_index_, 0, num_validity_bytes);
+    int num_value_bytes = num_rows * field_->data_width_bytes;
+    out->ResizeBufferBytes(field_index_, 1, num_value_bytes);
+    FlatArray out_array = std::get<FlatArray>(out->mutable_array(field_index_));
+    values_itr_ = out_array.values.data();
+    validity_itr_ = out_array.validity.data();
+    std::memset(validity_itr_, 0, num_validity_bytes);
+    validity_bit_mask_ = 1;
+  }
+
+  void DecodeValue(RandomAccessSource* source, int64_t src_offset) {
+    source->CopyFrom(values_itr_, src_offset, field_->data_width_bytes);
+    values_itr_ += field_->data_width_bytes;
+  }
+
+  void AdvanceValidity() {
+    validity_bit_mask_ <<= 1;
+    if (validity_bit_mask_ == 0) {
+      validity_bit_mask_ = 1;
+      validity_itr_++;
+    }
+  }
+
+  void DecodeValid() {
+    *validity_itr_ |= validity_bit_mask_;
+    AdvanceValidity();
+  }
+
+  void DecodeNull() {
+    AdvanceValidity();
+  }
+
+  const FieldDescriptor* field_;
+  int32_t field_index_;
+  uint8_t* values_itr_;
+  uint8_t* validity_itr_;
+  uint8_t validity_bit_mask_;
+};
+
+class RowQueueRandomAccessConsumerImpl : public RowQueueRandomAccessConsumer {
+ public:
+  RowQueueRandomAccessConsumerImpl(RowSchema schema, RandomAccessSource* source)
+      : schema_(std::move(schema)), source_(source) {}
+
+  Status Initialize() {
+    for (std::size_t field_idx = 0; field_idx < schema_.schema->top_level_types.size();
+         field_idx++) {
+      const auto& field = schema_.schema->top_level_types[field_idx];
+      switch (field.layout) {
+        case LayoutKind::kFlat:
+          flat_decoders_.emplace_back(&field, static_cast<int>(field_idx));
+          break;
+        default:
+          return Status::Invalid("No row based encoder yet provided for layout ",
+                                 layout::to_string(field.layout));
+      }
+    }
+    int32_t num_validity_bytes = bit_util::CeilDiv(schema_.schema->num_fields(), 8);
+    validity_scratch_.resize(num_validity_bytes);
+    return Status::OK();
+  }
+
+  Status Load(std::span<int32_t> indices, Batch* out) override {
+    out->SetLength(static_cast<int32_t>(indices.size()));
+    for (auto& flat_decoder : flat_decoders_) {
+      flat_decoder.Prepare(static_cast<int32_t>(indices.size()), out);
+    }
+    for (int32_t index : indices) {
+      int64_t field_offset = static_cast<int64_t>(schema_.fixed_length) * index;
+      for (auto& flat_decoder : flat_decoders_) {
+        flat_decoder.DecodeValue(source_, field_offset);
+        field_offset += flat_decoder.fixed_width();
+      }
+      // Load validity bytes
+      source_->CopyFrom(validity_scratch_.data(), field_offset, validity_scratch_.size());
+      auto flat_decoders_itr = flat_decoders_.begin();
+      uint8_t bitmask = 1;
+      auto validity_itr = validity_scratch_.begin();
+      while (flat_decoders_itr != flat_decoders_.end()) {
+        bool valid = bitmask & *validity_itr;
+        if (!valid) {
+          flat_decoders_itr->DecodeNull();
+        } else {
+          flat_decoders_itr->DecodeValid();
+        }
+        bitmask <<= 1;
+        if (bitmask == 0) {
+          bitmask = 1;
+          validity_itr++;
+        }
+        flat_decoders_itr++;
+      }
+    }
+    return Status::OK();
+  }
+
+ private:
+  RowSchema schema_;
+  RandomAccessSource* source_;
+
+  std::vector<FlatDecoder> flat_decoders_;
+  std::vector<uint8_t> validity_scratch_;
+};
+
+Status RowQueueRandomAccessConsumer::Create(
+    const SimpleSchema* schema, RandomAccessSource* source,
+    std::unique_ptr<RowQueueRandomAccessConsumer>* out) {
+  RowSchema row_schema(sizeof(int64_t), sizeof(int64_t));
+  QUIVER_RETURN_NOT_OK(row_schema.Initialize(*schema));
+  auto impl =
+      std::make_unique<RowQueueRandomAccessConsumerImpl>(std::move(row_schema), source);
   QUIVER_RETURN_NOT_OK(impl->Initialize());
   *out = std::move(impl);
   return Status::OK();

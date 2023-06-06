@@ -9,35 +9,16 @@
 
 namespace quiver {
 
-class Sink {
+class StreamSink {
  public:
-  Sink(uint8_t* initial_buf, int32_t initial_len,
-       std::function<uint8_t*(uint8_t*, int32_t*)> swap)
-      : itr_(initial_buf), remaining_(initial_len), swap_(std::move(swap)) {}
-  void CopyInto(const uint8_t* src, int32_t len) {
-    while (len > 0) {
-      int32_t to_write = std::min(len, remaining_);
-      len -= to_write;
-      remaining_ -= to_write;
-      std::memcpy(itr_, src, to_write);
-      if (remaining_ == 0) {
-        itr_ = swap_(itr_, &remaining_);
-      }
-    }
-  }
 
-  void CopyInto(uint8_t byte) {
-    *itr_ = byte;
-    itr_++;
-    remaining_--;
-    if (remaining_ == 0) {
-      itr_ = swap_(itr_, &remaining_);
-    }
-  }
+  StreamSink(uint8_t* initial_buf, int32_t initial_len, std::function<uint8_t*(uint8_t*, int32_t*)> swap);
+  void CopyInto(const uint8_t* src, int32_t len);
+  void CopyInto(uint8_t byte);
 
   // Creates a sink that writes to a buffer and wraps
   // if it ever needs to swap
-  static Sink FromFixedSizeSpan(std::span<uint8_t> span);
+  static StreamSink FromFixedSizeSpan(std::span<uint8_t> span);
 
  private:
   uint8_t* itr_;
@@ -45,8 +26,14 @@ class Sink {
   std::function<uint8_t*(uint8_t*, int32_t*)> swap_;
 };
 
-class OutputStream {
-  virtual void Write(std::span<uint8_t> data) = 0;
+class RandomAccessSource {
+ public:
+  void CopyFrom(uint8_t* dest, int32_t offset, int32_t len);
+  static RandomAccessSource WrapSpan(std::span<uint8_t> span);
+
+ private:
+  RandomAccessSource(uint8_t* buf);
+  uint8_t* buf_;
 };
 
 }  // namespace quiver

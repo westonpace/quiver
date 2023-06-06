@@ -47,15 +47,12 @@ void BM_EncodeRows(benchmark::State& state) {
   auto* buf = new uint8_t[kNumBytes];
   std::span<uint8_t> buf_span(buf, kNumBytes);
 
-  Sink sink = Sink::FromFixedSizeSpan(buf_span);
+  StreamSink sink = StreamSink::FromFixedSizeSpan(buf_span);
 
   const TestData& test_data = GetTestData();
 
-  row::RowSchema row_schema(8, 8);
-  row_schema.Initialize(test_data.schema).AbortNotOk();
-
   std::unique_ptr<row::RowQueueAppendingProducer> encoder;
-  row::RowQueueAppendingProducer::Create(&row_schema, &sink, &encoder).AbortNotOk();
+  row::RowQueueAppendingProducer::Create(&test_data.schema, &sink, &encoder).AbortNotOk();
 
   for (auto _iter : state) {
     encoder->Append(*test_data.batch).AbortNotOk();

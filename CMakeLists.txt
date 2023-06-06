@@ -41,11 +41,12 @@ endif()
 
 if(QUIVER_BUILD_TESTS)
     find_package(GTest CONFIG REQUIRED)
+    find_package(Arrow CONFIG REQUIRED)
     enable_testing()
 endif()
 
 if(QUIVER_BUILD_BENCHMARKS)
-    find_package(arrow CONFIG REQUIRED)
+    find_package(Arrow CONFIG REQUIRED)
     find_package(benchmark CONFIG REQUIRED)
 endif()
 
@@ -114,22 +115,32 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 endif()
 
 if(QUIVER_BUILD_TESTS)
-    add_executable(test_test src/quiver/test_test.cc)
+    add_executable(
+        core_test
+        src/quiver/core/array_test.cc
+        src/quiver/testutil/test_util.cc)
     add_executable(
         utility_test
         src/quiver/util/arrow_util_test.cc
         src/quiver/util/cpu_info_test.cc
         src/quiver/util/memory_test.cc)
     add_executable(
+        row_test
+        src/quiver/row/row_test.cc
+        src/quiver/testutil/gen.cc
+        src/quiver/testutil/test_util.cc)
+    add_executable(
         store_test
         src/quiver/store/mmap_store_test.cc)
     
-    target_link_libraries(test_test PRIVATE quiver GTest::gtest_main)
+    target_link_libraries(core_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
+    target_link_libraries(row_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
     target_link_libraries(utility_test PRIVATE quiver GTest::gtest_main)
     target_link_libraries(store_test PRIVATE quiver GTest::gtest_main)
 
     include(GoogleTest)
-    gtest_discover_tests(test_test)
+    gtest_discover_tests(core_test)
+    gtest_discover_tests(row_test)
     gtest_discover_tests(utility_test)
     gtest_discover_tests(store_test)
 endif()

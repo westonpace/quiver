@@ -48,6 +48,10 @@ struct ArrowArray {
   void (*release)(struct ArrowArray*);
   // Opaque producer-specific data
   void* private_data;
+
+  static ArrowArray Default() {
+    return {0, 0, 0, 0, 0, nullptr, nullptr, nullptr, nullptr, nullptr};
+  }
 };
 
 #endif  // ARROW_C_DATA_INTERFACE

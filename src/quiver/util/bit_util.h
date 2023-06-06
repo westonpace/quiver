@@ -51,6 +51,9 @@ constexpr int32_t CeilDiv(int32_t value, int32_t divisor) {
   return (value == 0) ? 0 : 1 + (value - 1) / divisor;
 }
 
+constexpr int64_t FloorDiv(int64_t value, int64_t divisor) { return value / divisor; }
+constexpr int32_t FloorDiv(int32_t value, int32_t divisor) { return value / divisor; }
+
 /// Only valid if pwr_2 is a power of two.  Quickly calculate the number of
 /// bytes needed to get from x to the next pwr_2
 ///

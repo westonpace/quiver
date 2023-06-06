@@ -24,7 +24,7 @@ void assert_ok(const arrow::Status& status) {
 namespace {
 
 const auto& RandomEngine() {
-  static std::independent_bits_engine<std::default_random_engine, 8, uint8_t> engine;
+  static std::independent_bits_engine<std::default_random_engine, 32, uint32_t> engine;
   return engine;
 }
 
