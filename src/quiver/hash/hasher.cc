@@ -1,5 +1,7 @@
 #include "quiver/hash/hasher.h"
 
+#include <cstring>
+
 #include "quiver/util/logging_p.h"
 
 namespace quiver::hash {

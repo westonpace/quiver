@@ -1,5 +1,7 @@
 #include "quiver/map/equality.h"
 
+#include <cstring>
+
 #include "quiver/util/logging_p.h"
 
 namespace quiver::map {
@@ -24,9 +26,9 @@ class SimpleBinaryEqualityComparer : public EqualityComparer {
   }
 
  private:
-  void AllFalse(std::span<uint8_t> out) const { std::memset(out.data(), 0, out.size()); }
-  void CompareFlatEquality(ReadOnlyFlatArray lhs, ReadOnlyFlatArray rhs,
-                           std::span<uint8_t> out) const {
+  static void AllFalse(std::span<uint8_t> out) { std::memset(out.data(), 0, out.size()); }
+  static void CompareFlatEquality(ReadOnlyFlatArray lhs, ReadOnlyFlatArray rhs,
+                                  std::span<uint8_t> out) {
     AllFalse(out);
     if (lhs.width_bytes != rhs.width_bytes) {
       return;
@@ -37,7 +39,8 @@ class SimpleBinaryEqualityComparer : public EqualityComparer {
     int width_bytes = lhs.width_bytes;
     uint8_t bitmask = 1;
     for (int i = 0; i < lhs.length; i++) {
-      *out_itr |= bitmask & (memcmp(lhs_val_itr, rhs_val_itr, width_bytes) == 0);
+      *out_itr |= bitmask & (0xFF * static_cast<uint8_t>(memcmp(lhs_val_itr, rhs_val_itr,
+                                                                width_bytes) == 0));
       lhs_val_itr += width_bytes;
       rhs_val_itr += width_bytes;
       bitmask <<= 1;
@@ -47,10 +50,10 @@ class SimpleBinaryEqualityComparer : public EqualityComparer {
       }
     }
     out_itr = out.data();
-    for (int i = 0; i < out.size(); i++) {
+    for (uint64_t i = 0; i < out.size(); i++) {
       const uint8_t* lhs_valid_itr = lhs.validity.data();
       const uint8_t* rhs_valid_itr = rhs.validity.data();
-      *out_itr &= ~(*lhs_valid_itr ^ *lhs_valid_itr);
+      *out_itr &= ~(*lhs_valid_itr ^ *rhs_valid_itr);
     }
   }
 };

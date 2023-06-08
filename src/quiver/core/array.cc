@@ -225,8 +225,10 @@ Status DoImportSchemaField(const ArrowSchema& schema, SimpleSchema* out) {
 
 namespace buffer {
 
+namespace {
 void PrintBitmap(std::span<const uint8_t> bitmap, int32_t length,
-                 int32_t indentation_level, int32_t max_chars, std::ostream& out) {
+                 int32_t indentation_level, int32_t max_chars, std::ostream& out,
+                 char true_char, char false_char) {
   for (int i = 0; i < indentation_level; i++) {
     out << " ";
   }
@@ -243,15 +245,47 @@ void PrintBitmap(std::span<const uint8_t> bitmap, int32_t length,
 
   for (int i = 0; i < length; i++) {
     if ((*itr & bitmask) != 0) {
-      out << "#";
+      out << true_char;
     } else {
-      out << "-";
+      out << false_char;
     }
     bitmask <<= 1;
     if (bitmask == 0) {
       bitmask = 1;
       itr++;
     }
+  }
+  if (truncated) {
+    out << "...";
+  }
+}
+}  // namespace
+
+void PrintBitmap(std::span<const uint8_t> bitmap, int32_t length,
+                 int32_t indentation_level, int32_t max_chars, std::ostream& out) {
+  PrintBitmap(bitmap, length, indentation_level, max_chars, out, '#', '-');
+}
+
+void PrintBoolmap(std::span<const uint8_t> bitmap, int32_t length,
+                  int32_t indentation_level, int32_t max_chars, std::ostream& out) {
+  PrintBitmap(bitmap, length, indentation_level, max_chars, out, 'T', 'F');
+}
+
+void PrintImplicitBitmap(int32_t length, int32_t indentation_level, int32_t max_chars,
+                         std::ostream& out) {
+  for (int i = 0; i < indentation_level; i++) {
+    out << " ";
+  }
+
+  int chars_remaining = max_chars - indentation_level;
+  bool truncated = false;
+  if (chars_remaining < length) {
+    length = chars_remaining;
+    truncated = true;
+  }
+
+  for (int i = 0; i < length; i++) {
+    out << "#";
   }
   if (truncated) {
     out << "...";
@@ -304,8 +338,10 @@ bool BinaryEqualsWithSelection(std::span<const uint8_t> lhs, std::span<const uin
   }
   DCHECK_EQ(lhs.size() % element_size_bytes, 0);
   DCHECK_EQ(rhs.size() % element_size_bytes, 0);
-  DCHECK_EQ(bit_util::CeilDiv(lhs.size() / element_size_bytes, 8),
-            selection_bitmap.size());
+  DCHECK_EQ(bit_util::CeilDiv(static_cast<int64_t>(lhs.size()) /
+                                  static_cast<int64_t>(element_size_bytes),
+                              8LL),
+            static_cast<int64_t>(selection_bitmap.size()));
   // TODO: Surely there is a much better SIMD way to do this
   uint8_t bitmask = 1;
   const uint8_t* left_itr = lhs.data();
@@ -377,14 +413,26 @@ void PrintArray(ReadOnlyArray array, const FieldDescriptor& type, int indentatio
       ReadOnlyFlatArray flat_array = std::get<ReadOnlyFlatArray>(array);
       print_indent();
       out << "validity: ";
-      ::quiver::buffer::PrintBitmap(flat_array.validity,
-                                    static_cast<int32_t>(flat_array.length),
-                                    /*indentation_level=*/0, chars_remaining - 10, out);
+      if (flat_array.validity.empty()) {
+        ::quiver::buffer::PrintImplicitBitmap(static_cast<int32_t>(flat_array.length),
+                                              /*indentation_level=*/0,
+                                              chars_remaining - 10, out);
+      } else {
+        ::quiver::buffer::PrintBitmap(flat_array.validity,
+                                      static_cast<int32_t>(flat_array.length),
+                                      /*indentation_level=*/0, chars_remaining - 10, out);
+      }
       out << std::endl;
       print_indent();
       out << "values: ";
-      ::quiver::buffer::PrintBuffer(flat_array.values, type.data_width_bytes,
-                                    /*indentation_level=*/0, chars_remaining - 7, out);
+      if (type.data_width_bytes == 0) {
+        ::quiver::buffer::PrintBoolmap(flat_array.values,
+                                       static_cast<int32_t>(flat_array.length),
+                                       /*indentation_level=*/0, chars_remaining - 7, out);
+      } else {
+        ::quiver::buffer::PrintBuffer(flat_array.values, type.data_width_bytes,
+                                      /*indentation_level=*/0, chars_remaining - 7, out);
+      }
       break;
     }
     default:
@@ -413,6 +461,11 @@ bool BinaryEquals(ReadOnlyArray lhs, ReadOnlyArray rhs) {
       if (!buffer::BinaryEquals(lhs_flat.validity, rhs_flat.validity)) {
         return false;
       }
+      if (lhs_flat.validity.empty()) {
+        // Implicit validity, so we can just compare the values buffers
+        return buffer::BinaryEquals(lhs_flat.values, rhs_flat.values);
+      }
+      // Only compare the non-null parts of the values buffers
       return buffer::BinaryEqualsWithSelection(lhs_flat.values, rhs_flat.values,
                                                lhs_flat.width_bytes, lhs_flat.validity);
     }

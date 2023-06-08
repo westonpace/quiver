@@ -168,6 +168,10 @@ using ReadOnlyArray = std::variant<ReadOnlyFlatArray, ReadOnlyInt32ContiguousLis
 namespace buffer {
 void PrintBitmap(std::span<const uint8_t> bitmap, int length, int indentation_level,
                  int max_chars, std::ostream& out);
+void PrintBoolmap(std::span<const uint8_t> bitmap, int length, int indentation_level,
+                  int max_chars, std::ostream& out);
+void PrintImplicitBitmap(int length, int indentation_level, int max_chars,
+                         std::ostream& out);
 void PrintBuffer(std::span<const uint8_t> buffer, int bytes_per_element,
                  int indentation_level, int max_chars, std::ostream& out);
 bool BinaryEquals(std::span<const uint8_t> lhs, std::span<const uint8_t> rhs);

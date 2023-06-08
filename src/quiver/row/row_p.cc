@@ -141,16 +141,6 @@ Status CheckSupportsSchema(const SimpleSchema& schema) {
 
 bool IsInitialized(const RowSchema& metadata) { return metadata.schema != nullptr; }
 
-// Rounding up offset to the beginning of next column,
-// choosing required alignment based on the data type of that column.
-int32_t PaddingNeeded(int32_t offset, int32_t string_alignment,
-                      const FieldDescriptor& field) {
-  if (bit_util::IsPwr2OrZero(field.data_width_bytes)) {
-    return 0;
-  }
-  return bit_util::PaddingNeededPwr2(offset, string_alignment);
-}
-
 }  // namespace
 
 Status RowSchema::Initialize(const SimpleSchema& schema) {
