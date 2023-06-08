@@ -299,6 +299,8 @@ class Batch : public MutableBatch {
   /// </summary>
   [[nodiscard]] virtual int64_t buffer_capacity(int32_t array_index, int32_t buffer_index) = 0;
 
+  void ResizeFixedParts(int32_t array_index, int64_t new_length);
+
   /// <summary>
   /// Creates a basic instance of Batch
   /// </summary>

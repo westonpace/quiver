@@ -34,6 +34,7 @@ T assert_or_assign(arrow::Result<T> res,
   return res.MoveValueUnsafe();
 }
 
+std::shared_ptr<arrow::Array> BoolArray(const std::vector<std::optional<bool>>& values);
 std::shared_ptr<arrow::Array> Int8Array(const std::vector<std::optional<int8_t>>& values);
 std::shared_ptr<arrow::Array> Int16Array(
     const std::vector<std::optional<int16_t>>& values);

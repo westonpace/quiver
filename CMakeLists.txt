@@ -60,6 +60,7 @@ add_library(
     src/quiver/core/array.cc
     src/quiver/core/io.cc
     src/quiver/hash/hasher.cc
+    src/quiver/map/equality.cc
     src/quiver/row/row_p.cc
     src/quiver/store/mmap_store.cc
     src/quiver/util/arrow_util.cc
@@ -126,6 +127,11 @@ if(QUIVER_BUILD_TESTS)
         src/quiver/testutil/gen.cc
         src/quiver/testutil/test_util.cc)
     add_executable(
+        map_test
+        src/quiver/map/equality_test.cc
+        src/quiver/testutil/gen.cc
+        src/quiver/testutil/test_util.cc)
+    add_executable(
         row_test
         src/quiver/row/row_test.cc
         src/quiver/testutil/gen.cc
@@ -141,6 +147,7 @@ if(QUIVER_BUILD_TESTS)
     
     target_link_libraries(core_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
     target_link_libraries(hash_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
+    target_link_libraries(map_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
     target_link_libraries(row_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
     target_link_libraries(store_test PRIVATE quiver GTest::gtest_main)
     target_link_libraries(utility_test PRIVATE quiver GTest::gtest_main)
@@ -148,6 +155,7 @@ if(QUIVER_BUILD_TESTS)
     include(GoogleTest)
     gtest_discover_tests(core_test)
     gtest_discover_tests(hash_test)
+    gtest_discover_tests(map_test)
     gtest_discover_tests(row_test)
     gtest_discover_tests(store_test)
     gtest_discover_tests(utility_test)

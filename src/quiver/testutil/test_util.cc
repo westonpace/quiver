@@ -51,6 +51,10 @@ std::shared_ptr<arrow::Array> TestArray(const std::vector<std::optional<CType>>&
   return throw_or_assign(arr);
 }
 
+std::shared_ptr<arrow::Array> BoolArray(const std::vector<std::optional<bool>>& values) {
+  return TestArray<arrow::BooleanBuilder, bool>(values);
+}
+
 std::shared_ptr<arrow::Array> Int8Array(
     const std::vector<std::optional<int8_t>>& values) {
   return TestArray<arrow::Int8Builder, int8_t>(values);

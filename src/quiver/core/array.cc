@@ -347,7 +347,8 @@ ReadOnlyArray ArrayView(Array array) {
   switch (ArrayLayout(array)) {
     case LayoutKind::kFlat: {
       FlatArray flat_array = std::get<FlatArray>(array);
-      return ReadOnlyFlatArray{flat_array.validity, flat_array.values, flat_array.width_bytes, flat_array.length};
+      return ReadOnlyFlatArray{flat_array.validity, flat_array.values,
+                               flat_array.width_bytes, flat_array.length};
     }
     default:
       DCHECK(false) << "Not yet implemented";
@@ -552,7 +553,8 @@ class ImportedBatch : public ReadOnlyBatch {
         std::span<const uint8_t> values;
         QUIVER_RETURN_NOT_OK(GetBufferOrEmptySpan<const uint8_t>(
             array, /*index=*/1, length, field.data_width_bytes, field.layout, &values));
-        arrays_.emplace_back(ReadOnlyFlatArray{validity, values, field.data_width_bytes, length});
+        arrays_.emplace_back(
+            ReadOnlyFlatArray{validity, values, field.data_width_bytes, length});
         num_bytes_ += values.size();
         num_buffers_++;
         break;
@@ -686,8 +688,8 @@ class BasicBatch : public Batch {
         const FieldDescriptor& type = schema_->types[index];
         std::span<const uint8_t> validity =
             BufferToSpan(buffer_offset, bit_util::CeilDiv(length_, 8LL));
-        std::span<const uint8_t> values = BufferToSpan(
-            buffer_offset + 1, length_ * type.data_width_bytes);
+        std::span<const uint8_t> values =
+            BufferToSpan(buffer_offset + 1, length_ * type.data_width_bytes);
         return ReadOnlyFlatArray{validity, values, type.data_width_bytes, length_};
       }
       default:
@@ -702,8 +704,8 @@ class BasicBatch : public Batch {
         const FieldDescriptor& type = schema_->types[index];
         std::span<uint8_t> validity =
             BufferToSpan(buffer_offset, bit_util::CeilDiv(length_, 8LL));
-        std::span<uint8_t> values = BufferToSpan(
-            buffer_offset + 1, length_ * type.data_width_bytes);
+        std::span<uint8_t> values =
+            BufferToSpan(buffer_offset + 1, length_ * type.data_width_bytes);
         return FlatArray{validity, values, type.data_width_bytes, length_};
       }
       default:
@@ -777,6 +779,21 @@ bool ReadOnlyBatch::BinaryEquals(const ReadOnlyBatch& other) const {
     }
   }
   return true;
+}
+
+void Batch::ResizeFixedParts(int32_t array_index, int64_t new_length) {
+  const FieldDescriptor& type = schema()->top_level_types[array_index];
+  switch (type.layout) {
+    case LayoutKind::kFlat: {
+      int64_t num_validity_bytes = bit_util::CeilDiv(new_length, 8LL);
+      int64_t num_value_bytes = new_length * type.data_width_bytes;
+      ResizeBufferBytes(array_index, 0, num_validity_bytes);
+      ResizeBufferBytes(array_index, 1, num_value_bytes);
+      break;
+    }
+    default:
+      DCHECK(false) << "Not yet implemented";
+  }
 }
 
 std::unique_ptr<Batch> Batch::CreateBasic(const SimpleSchema* schema) {

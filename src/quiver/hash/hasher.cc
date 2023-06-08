@@ -48,7 +48,7 @@ class IdentityHasherImpl : public Hasher {
 
 }  // namespace
 
-std::unique_ptr<Hasher> CreateIdentityHasher(int32_t hash_width_bytes) {
+std::unique_ptr<Hasher> Hasher::CreateIdentityHasher(int32_t hash_width_bytes) {
   return std::make_unique<IdentityHasherImpl>(hash_width_bytes);
 }
 
