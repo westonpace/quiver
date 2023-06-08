@@ -15,7 +15,7 @@ namespace quiver::row {
 // These tests encode and decode from a big scratch space.  We don't
 // want to bother with allocation, etc. and so we just allocate a bit
 // space to use
-constexpr int64_t kEnoughBytesForScratch = 1024 * 1024;
+constexpr int64_t kEnoughBytesForScratch = 1024LL * 1024LL;
 
 class RowEncodingTest : public ::testing::Test {
  public:
@@ -25,7 +25,6 @@ class RowEncodingTest : public ::testing::Test {
         sink_(StreamSink::FromFixedSizeSpan(scratch_)),
         source_(RandomAccessSource::WrapSpan(scratch_)){};
 
- protected:
   // Encode the entire batch, then select the entire batch, in order, and test for
   // equality to input
   void CheckFullRoundTrip(const SchemaAndBatch& data) {
@@ -79,8 +78,10 @@ TEST_F(RowEncodingTest, BasicRoundTrip) {
 }
 
 // Test the case where we need more than one byte to store validity bits
-TEST_F(RowEncodingTest, ManyColumns) { constexpr int kNumColumns = 50;
+TEST_F(RowEncodingTest, ManyColumns) {
+  constexpr int kNumColumns = 50;
   std::vector<std::shared_ptr<arrow::Array>> arrays;
+  arrays.reserve(kNumColumns);
   for (int i = 0; i < kNumColumns; i++) {
     arrays.push_back(Int8Array({{}, i, {}, 2}));
   }
@@ -88,8 +89,6 @@ TEST_F(RowEncodingTest, ManyColumns) { constexpr int kNumColumns = 50;
   CheckFullRoundTrip(data);
 }
 
-TEST_F(RowEncodingTest, LargeInput) {
-
-}
+TEST_F(RowEncodingTest, LargeInput) {}
 
 }  // namespace quiver::row

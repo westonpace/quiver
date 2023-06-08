@@ -27,10 +27,12 @@ TEST(ArrowCData, BasicRoundTrip) {
   util::OwnedArrowArray input_array = util::AllocateArrowArray();
   util::OwnedArrowSchema input_schema = util::AllocateArrowSchema();
 
-  assert_ok(arrow::ExportRecordBatch(*BuildTestBatch(), input_array.get(), input_schema.get()));
+  assert_ok(
+      arrow::ExportRecordBatch(*BuildTestBatch(), input_array.get(), input_schema.get()));
 
   SimpleSchema quiver_schema;
-  assert_ok(SimpleSchema::ImportFromArrow(input_schema.get(), &quiver_schema, /*consume_schema=*/false));
+  assert_ok(SimpleSchema::ImportFromArrow(input_schema.get(), &quiver_schema,
+                                          /*consume_schema=*/false));
   ASSERT_NE(input_schema->release, nullptr);
 
   std::unique_ptr<ReadOnlyBatch> quiver_batch;

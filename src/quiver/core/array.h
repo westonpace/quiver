@@ -3,12 +3,12 @@
 #pragma once
 
 #include <cstdint>
+#include <iosfwd>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <variant>
-#include <iosfwd>
 #include <vector>
 
 #include "quiver/core/arrow.h"
@@ -71,21 +71,22 @@ struct SimpleSchema {
   }
   [[nodiscard]] int num_types() const { return static_cast<int>(types.size()); }
 
-  const FieldDescriptor& field(int field_idx) const {
+  [[nodiscard]] const FieldDescriptor& field(int field_idx) const {
     return types[top_level_indices[field_idx]];
   }
 
   /// <summary>
   /// Converts from a C data schema to a quiver schema
   /// </summary>
-  /// By default the C data schema is consumed (its `release` will be set to nullptr) whether
-  /// the import succeeds or fails.
-  /// 
-  /// This is merely a convenience.  The import process fully copies all data from the source schema
-  /// to the quiver schema and so there is no confusion of ownership.
-  /// 
-  /// By setting `consume_schema` to false the C data schema is never consumed. 
-  static Status ImportFromArrow(ArrowSchema* schema, SimpleSchema* out, bool consume_schema = true);
+  /// By default the C data schema is consumed (its `release` will be set to nullptr)
+  /// whether the import succeeds or fails.
+  ///
+  /// This is merely a convenience.  The import process fully copies all data from the
+  /// source schema to the quiver schema and so there is no confusion of ownership.
+  ///
+  /// By setting `consume_schema` to false the C data schema is never consumed.
+  static Status ImportFromArrow(ArrowSchema* schema, SimpleSchema* out,
+                                bool consume_schema = true);
   Status ExportToArrow(ArrowSchema* out);
 
   [[nodiscard]] bool Equals(const SimpleSchema& other) const;
@@ -130,10 +131,8 @@ struct ReadOnlyContiguousListArray {
   int64_t length = 0;
 };
 
-struct ReadOnlyInt32ContiguousListArray : ReadOnlyContiguousListArray<int32_t> {
-};
-struct ReadOnlyInt64ContiguousListArray : ReadOnlyContiguousListArray<int64_t> {
-};
+struct ReadOnlyInt32ContiguousListArray : ReadOnlyContiguousListArray<int32_t> {};
+struct ReadOnlyInt64ContiguousListArray : ReadOnlyContiguousListArray<int64_t> {};
 
 struct StructArray {
   std::span<uint8_t> validity;
@@ -157,7 +156,7 @@ struct ReadOnlyFixedListArray {
   int64_t length = 0;
 };
 
-constexpr LayoutKind kArrayVariantIdxToLayout[] = {
+constexpr std::array<LayoutKind, 5> kArrayVariantIdxToLayout = {
     LayoutKind::kFlat, LayoutKind::kInt32ContiguousList, LayoutKind::kInt64ContiguousList,
     LayoutKind::kStructArray, LayoutKind::kFixedListArray};
 using Array = std::variant<FlatArray, Int32ContiguousListArray, Int64ContiguousListArray,
@@ -175,7 +174,7 @@ bool BinaryEquals(std::span<const uint8_t> lhs, std::span<const uint8_t> rhs);
 bool BinaryEqualsWithSelection(std::span<const uint8_t> lhs, std::span<const uint8_t> rhs,
                                int32_t element_size_bytes,
                                std::span<const uint8_t> selection);
-}
+}  // namespace buffer
 
 namespace array {
 
@@ -212,13 +211,14 @@ class ReadOnlyArrayVisitor {
 
 /// <summary>
 /// A batch of memory that has zero or more arrays
-/// 
+///
 /// Batches own their memory and free it upon destruction
-/// 
-/// In quiver, batches are flat.  This means that nested structures will have multiple entries
-/// in the batch.  For example, a list array at index 0 will have a child array at index 1 which
-/// contains the list items.  This child array will not have the same length as the list array
-/// 
+///
+/// In quiver, batches are flat.  This means that nested structures will have multiple
+/// entries in the batch.  For example, a list array at index 0 will have a child array at
+/// index 1 which contains the list items.  This child array will not have the same length
+/// as the list array
+///
 /// However, all "top-level" arrays (as described by the schema) will have the same length
 /// </summary>
 class ReadOnlyBatch {
@@ -237,7 +237,7 @@ class ReadOnlyBatch {
   [[nodiscard]] virtual ReadOnlyArray array(int32_t index) const = 0;
   /// <summary>
   /// A view into the schema of the batch
-  /// 
+  ///
   /// Batches do not own their schemas.  The schema is usually associated with
   /// a queue or more permanent structure which may have many batches.
   /// </summary>
@@ -257,13 +257,14 @@ class ReadOnlyBatch {
   /// <summary>
   /// Exports the batch to the C data interface.
   /// </summary>
-  /// 
-  /// Once this method has been called then ownership of the data is passed to the ArrowArray.
-  /// Any attempt to use this instance after this method is called will result in undefined behavior.
+  ///
+  /// Once this method has been called then ownership of the data is passed to the
+  /// ArrowArray. Any attempt to use this instance after this method is called will result
+  /// in undefined behavior.
   virtual Status ExportToArrow(ArrowArray* out) && = 0;
 
-  std::string ToString() const;
-  bool BinaryEquals(const ReadOnlyBatch& other) const;
+  [[nodiscard]] std::string ToString() const;
+  [[nodiscard]] bool BinaryEquals(const ReadOnlyBatch& other) const;
 };
 
 /// <summary>
@@ -287,47 +288,50 @@ class Batch : public MutableBatch {
   /// require copying the bytes from the old buffer into the new buffer.  This also sets
   /// the bytes to zero
   /// </summary>
-  virtual void ResizeBufferBytes(int32_t array_index, int32_t buffer_index, int64_t num_bytes) = 0;
+  virtual void ResizeBufferBytes(int32_t array_index, int32_t buffer_index,
+                                 int64_t num_bytes) = 0;
   /// <summary>
-  /// Sets the length for top-level arrays in this batch.  This does not resize any buffers.  The caller is
-  /// responsible for doing that.
+  /// Sets the length for top-level arrays in this batch.  This does not resize any
+  /// buffers.  The caller is responsible for doing that.
   /// </summary>
   virtual void SetLength(int64_t new_length) = 0;
   /// <summary>
-  /// Fetch the capacity of the buffer.  This is how large the buffer can be resized before
-  /// a new allocation will be required.
+  /// Fetch the capacity of the buffer.  This is how large the buffer can be resized
+  /// before a new allocation will be required.
   /// </summary>
-  [[nodiscard]] virtual int64_t buffer_capacity(int32_t array_index, int32_t buffer_index) = 0;
+  [[nodiscard]] virtual int64_t buffer_capacity(int32_t array_index,
+                                                int32_t buffer_index) = 0;
 
   void ResizeFixedParts(int32_t array_index, int64_t new_length);
 
   /// <summary>
   /// Creates a basic instance of Batch
   /// </summary>
-  /// In this basic instance each buffer is a separate allocation.  Resizing will perform a reallocation
-  /// if the buffer is not already large enough and copy the data.
+  /// In this basic instance each buffer is a separate allocation.  Resizing will perform
+  /// a reallocation if the buffer is not already large enough and copy the data.
   static std::unique_ptr<Batch> CreateBasic(const SimpleSchema* schema);
   /// <summary>
   /// Creates a basic batch that has already been allocated some space
   /// </summary>
-  /// The `num_bytes` space will be allocated evenly across all buffers.  In practice this is unlikely
-  /// to be useful if the batch will contain any variable length buffers.  However, for benchmarking, testing,
-  /// or various other cases it can be useful to do all of the allocations up-front so they don't show up
-  /// in results.
-  static std::unique_ptr<Batch> CreateInitializedBasic(
-      const SimpleSchema* schema, int64_t num_bytes);
+  /// The `num_bytes` space will be allocated evenly across all buffers.  In practice this
+  /// is unlikely to be useful if the batch will contain any variable length buffers.
+  /// However, for benchmarking, testing, or various other cases it can be useful to do
+  /// all of the allocations up-front so they don't show up in results.
+  static std::unique_ptr<Batch> CreateInitializedBasic(const SimpleSchema* schema,
+                                                       int64_t num_bytes);
 };
 
 /// <summary>
 /// Consumes an ArrowArray to create a ReadOnlyBatch
 /// </summary>
-/// 
-/// This converts from the C data standard to quiver's internal representation.  This is a zero
-/// copy operation.  No buffers will be copied, only metadata.
-/// 
-/// The input array will be consumed (its `release` will be set to nullptr).  This is true even
-/// if there is an error in conversion (in this case the input array will immediately be released).
-/// 
+///
+/// This converts from the C data standard to quiver's internal representation.  This is a
+/// zero copy operation.  No buffers will be copied, only metadata.
+///
+/// The input array will be consumed (its `release` will be set to nullptr).  This is true
+/// even if there is an error in conversion (in this case the input array will immediately
+/// be released).
+///
 /// The data will be released when the newly created ReadOnlyBatch is destroyed.
 Status ImportBatch(ArrowArray* array, const SimpleSchema* schema,
                    std::unique_ptr<ReadOnlyBatch>* out);

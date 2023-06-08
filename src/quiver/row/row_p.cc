@@ -193,8 +193,7 @@ Status RowSchema::Initialize(const SimpleSchema& schema) {
 
 class FlatEncoder {
  public:
-  FlatEncoder(const FieldDescriptor& field)
-      : field_(field), validity_(nullptr), values_(nullptr), bitmask_(1) {
+  FlatEncoder(const FieldDescriptor& field) : field_(field) {
     width_ = field_.data_width_bytes;
   }
 
@@ -227,10 +226,10 @@ class FlatEncoder {
 
  private:
   const FieldDescriptor& field_;
-  const uint8_t* values_;
-  const uint8_t* validity_;
+  const uint8_t* values_{};
+  const uint8_t* validity_{};
   int width_;
-  uint8_t bitmask_;
+  uint8_t bitmask_{};
 };
 
 template <typename ArrayType, typename OffsetType>
@@ -338,13 +337,9 @@ Status RowQueueAppendingProducer::Create(
 class FlatDecoder {
  public:
   FlatDecoder(const FieldDescriptor* field, int32_t field_idx)
-      : field_(field),
-        field_index_(field_idx),
-        values_itr_(nullptr),
-        validity_itr_(nullptr),
-        validity_bit_mask_(1) {}
+      : field_(field), field_index_(field_idx) {}
 
-  int32_t fixed_width() const { return field_->data_width_bytes; }
+  [[nodiscard]] int32_t fixed_width() const { return field_->data_width_bytes; }
 
   void Prepare(int32_t num_rows, Batch* out) {
     int num_validity_bytes = bit_util::CeilDiv(num_rows, 8);
@@ -376,15 +371,13 @@ class FlatDecoder {
     AdvanceValidity();
   }
 
-  void DecodeNull() {
-    AdvanceValidity();
-  }
+  void DecodeNull() { AdvanceValidity(); }
 
   const FieldDescriptor* field_;
   int32_t field_index_;
-  uint8_t* values_itr_;
-  uint8_t* validity_itr_;
-  uint8_t validity_bit_mask_;
+  uint8_t* values_itr_{};
+  uint8_t* validity_itr_{};
+  uint8_t validity_bit_mask_{};
 };
 
 class RowQueueRandomAccessConsumerImpl : public RowQueueRandomAccessConsumer {
@@ -422,12 +415,13 @@ class RowQueueRandomAccessConsumerImpl : public RowQueueRandomAccessConsumer {
         field_offset += flat_decoder.fixed_width();
       }
       // Load validity bytes
-      source_->CopyFrom(validity_scratch_.data(), field_offset, validity_scratch_.size());
+      source_->CopyFrom(validity_scratch_.data(), field_offset,
+                        static_cast<int32_t>(validity_scratch_.size()));
       auto flat_decoders_itr = flat_decoders_.begin();
       uint8_t bitmask = 1;
       auto validity_itr = validity_scratch_.begin();
       while (flat_decoders_itr != flat_decoders_.end()) {
-        bool valid = bitmask & *validity_itr;
+        bool valid = (bitmask & *validity_itr) != 0;
         if (!valid) {
           flat_decoders_itr->DecodeNull();
         } else {

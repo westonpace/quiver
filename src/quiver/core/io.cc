@@ -46,12 +46,12 @@ StreamSink StreamSink::FromFixedSizeSpan(std::span<uint8_t> span) {
           }};
 }
 
-void RandomAccessSource::CopyFrom(uint8_t* dest, int32_t offset, int32_t len) {
+void RandomAccessSource::CopyFrom(uint8_t* dest, int64_t offset, int32_t len) {
   std::memcpy(dest, buf_ + offset, len);
 }
 
 RandomAccessSource RandomAccessSource::WrapSpan(std::span<uint8_t> span) {
-  return RandomAccessSource(span.data());
+  return {span.data()};
 }
 
 RandomAccessSource::RandomAccessSource(uint8_t* buf) : buf_(buf) {}

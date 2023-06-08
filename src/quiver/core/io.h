@@ -11,8 +11,8 @@ namespace quiver {
 
 class StreamSink {
  public:
-
-  StreamSink(uint8_t* initial_buf, int32_t initial_len, std::function<uint8_t*(uint8_t*, int32_t*)> swap);
+  StreamSink(uint8_t* initial_buf, int32_t initial_len,
+             std::function<uint8_t*(uint8_t*, int32_t*)> swap);
   void CopyInto(const uint8_t* src, int32_t len);
   void CopyInto(uint8_t byte);
 
@@ -28,7 +28,7 @@ class StreamSink {
 
 class RandomAccessSource {
  public:
-  void CopyFrom(uint8_t* dest, int32_t offset, int32_t len);
+  void CopyFrom(uint8_t* dest, int64_t offset, int32_t len);
   static RandomAccessSource WrapSpan(std::span<uint8_t> span);
 
  private:

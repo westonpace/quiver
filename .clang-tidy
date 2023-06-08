@@ -22,10 +22,10 @@ Checks: bugprone-*,
     -misc-no-recursion,
     -modernize-use-trailing-return-type,
     -readability-function-cognitive-complexity,
+    -readability-magic-numbers,
 
 CheckOptions:
     misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic: true
-    readability-magic-numbers.IgnoredIntegerValues: 0;1;2;3;4;8
 
 WarningsAsErrors: "*"
 

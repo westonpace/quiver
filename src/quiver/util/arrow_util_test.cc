@@ -1,14 +1,14 @@
 #include "quiver/util/arrow_util.h"
 
-#include <cstdint>
-
 #include <gtest/gtest.h>
+
+#include <cstdint>
 
 namespace quiver::util {
 
 void MockRelease(ArrowArray* arr) {
   if (arr->private_data != nullptr) {
-    int32_t* pdata = reinterpret_cast<int32_t*>(arr->private_data);
+    auto* pdata = reinterpret_cast<int32_t*>(arr->private_data);
     *pdata = 42;
   }
 }

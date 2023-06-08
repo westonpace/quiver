@@ -17,20 +17,20 @@ T throw_or_assign(arrow::Result<T> res) {
   return res.MoveValueUnsafe();
 }
 
-void throw_not_ok(const arrow::Status& st);
+void throw_not_ok(const arrow::Status& status);
 
-void assert_ok(const arrow::Status& st,
+void assert_ok(const arrow::Status& status,
                std::source_location loc = std::source_location::current());
 
-void throw_not_ok(const Status& st);
+void throw_not_ok(const Status& status);
 
-void assert_ok(const Status& st,
+void assert_ok(const Status& status,
                std::source_location loc = std::source_location::current());
 
 template <typename T>
 T assert_or_assign(arrow::Result<T> res,
                    std::source_location loc = std::source_location::current()) {
-  assert_ok(res.status(), std::move(loc));
+  assert_ok(res.status(), loc);
   return res.MoveValueUnsafe();
 }
 
@@ -52,7 +52,6 @@ struct SchemaAndBatch {
   std::unique_ptr<ReadOnlyBatch> batch;
 };
 
-SchemaAndBatch TestBatch(
-    std::vector<std::shared_ptr<arrow::Array>> arrays);
+SchemaAndBatch TestBatch(std::vector<std::shared_ptr<arrow::Array>> arrays);
 
 }  // namespace quiver

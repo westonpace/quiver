@@ -29,7 +29,7 @@ std::string_view to_string(LayoutKind layout) {
   return kLayoutKindNames[static_cast<std::size_t>(layout)];
 }
 
-int num_buffers(LayoutKind layout) {
+int num_buffers(LayoutKind /*layout*/) {
   // This may need to be more complicated someday but right now this is true for all
   // layouts
   return 2;
@@ -180,7 +180,7 @@ Status CopyArrowSchema(const ArrowSchema& schema, FieldDescriptor* descriptor,
   } else if (format == "tiD") {
     descriptor->data_width_bytes = 8;
   } else if (format == "tin") {
-    descriptor->data_width_bytes = 16;  // NOLINT(readability-magic-numbers)
+    descriptor->data_width_bytes = 16;
   } else if (format == "+l") {
     descriptor->data_width_bytes = 4;
     descriptor->layout = LayoutKind::kInt32ContiguousList;
@@ -225,8 +225,8 @@ Status DoImportSchemaField(const ArrowSchema& schema, SimpleSchema* out) {
 
 namespace buffer {
 
-void PrintBitmap(std::span<const uint8_t> bitmap, int length, int indentation_level,
-                 int max_chars, std::ostream& out) {
+void PrintBitmap(std::span<const uint8_t> bitmap, int32_t length,
+                 int32_t indentation_level, int32_t max_chars, std::ostream& out) {
   for (int i = 0; i < indentation_level; i++) {
     out << " ";
   }
@@ -242,7 +242,7 @@ void PrintBitmap(std::span<const uint8_t> bitmap, int length, int indentation_le
   auto itr = bitmap.begin();
 
   for (int i = 0; i < length; i++) {
-    if (*itr & bitmask) {
+    if ((*itr & bitmask) != 0) {
       out << "#";
     } else {
       out << "-";
@@ -297,14 +297,15 @@ bool BinaryEquals(std::span<const uint8_t> lhs, std::span<const uint8_t> rhs) {
 }
 
 bool BinaryEqualsWithSelection(std::span<const uint8_t> lhs, std::span<const uint8_t> rhs,
-                               int32_t data_width_bytes,
+                               int32_t element_size_bytes,
                                std::span<const uint8_t> selection_bitmap) {
   if (lhs.size() != rhs.size()) {
     return false;
   }
-  DCHECK_EQ(lhs.size() % data_width_bytes, 0);
-  DCHECK_EQ(rhs.size() % data_width_bytes, 0);
-  DCHECK_EQ(bit_util::CeilDiv(lhs.size() / data_width_bytes, 8), selection_bitmap.size());
+  DCHECK_EQ(lhs.size() % element_size_bytes, 0);
+  DCHECK_EQ(rhs.size() % element_size_bytes, 0);
+  DCHECK_EQ(bit_util::CeilDiv(lhs.size() / element_size_bytes, 8),
+            selection_bitmap.size());
   // TODO: Surely there is a much better SIMD way to do this
   uint8_t bitmask = 1;
   const uint8_t* left_itr = lhs.data();
@@ -312,19 +313,19 @@ bool BinaryEqualsWithSelection(std::span<const uint8_t> lhs, std::span<const uin
   const uint8_t* right_itr = rhs.data();
   auto selection_itr = selection_bitmap.begin();
   while (left_itr != left_end) {
-    bool selected = *selection_itr & bitmask;
+    bool selected = (*selection_itr & bitmask) != 0;
     bitmask <<= 1;
     if (bitmask == 0) {
       bitmask = 1;
       selection_itr++;
     }
     if (selected) {
-      if (std::memcmp(left_itr, right_itr, data_width_bytes) != 0) {
+      if (std::memcmp(left_itr, right_itr, element_size_bytes) != 0) {
         return false;
       }
     }
-    left_itr += data_width_bytes;
-    right_itr += data_width_bytes;
+    left_itr += element_size_bytes;
+    right_itr += element_size_bytes;
   }
   return true;
 }
@@ -376,7 +377,8 @@ void PrintArray(ReadOnlyArray array, const FieldDescriptor& type, int indentatio
       ReadOnlyFlatArray flat_array = std::get<ReadOnlyFlatArray>(array);
       print_indent();
       out << "validity: ";
-      ::quiver::buffer::PrintBitmap(flat_array.validity, flat_array.length,
+      ::quiver::buffer::PrintBitmap(flat_array.validity,
+                                    static_cast<int32_t>(flat_array.length),
                                     /*indentation_level=*/0, chars_remaining - 10, out);
       out << std::endl;
       print_indent();
@@ -392,7 +394,8 @@ void PrintArray(ReadOnlyArray array, const FieldDescriptor& type, int indentatio
 
 std::string ToString(ReadOnlyArray array, const FieldDescriptor& type) {
   std::stringstream sstr;
-  PrintArray(array, type, /*indentation_level=*/0, /*max_chars=*/80, sstr);
+  PrintArray(array, type, /*indentation_level=*/0,
+             /*max_chars=*/80, sstr);
   return sstr.str();
 }
 
@@ -460,7 +463,7 @@ Status SimpleSchema::ImportFromArrow(ArrowSchema* schema, SimpleSchema* out,
   return Status::OK();
 }
 
-Status SimpleSchema::ExportToArrow(ArrowSchema* out) {
+Status SimpleSchema::ExportToArrow(ArrowSchema* /*out*/) {  // NOLINT
   return Status::NotImplemented("TODO");
 }
 
@@ -544,7 +547,7 @@ class ImportedBatch : public ReadOnlyBatch {
       QUIVER_RETURN_NOT_OK(GetBufferOrEmptySpan<const uint8_t>(array, /*index=*/0, length,
                                                                /*width=*/0, field.layout,
                                                                &validity));
-      num_bytes_ += validity.size();
+      num_bytes_ += static_cast<int32_t>(validity.size());
       num_buffers_++;
     }
 
@@ -555,7 +558,7 @@ class ImportedBatch : public ReadOnlyBatch {
             array, /*index=*/1, length, field.data_width_bytes, field.layout, &values));
         arrays_.emplace_back(
             ReadOnlyFlatArray{validity, values, field.data_width_bytes, length});
-        num_bytes_ += values.size();
+        num_bytes_ += static_cast<int64_t>(values.size());
         num_buffers_++;
         break;
       }
@@ -571,7 +574,7 @@ class ImportedBatch : public ReadOnlyBatch {
           }
           QUIVER_RETURN_NOT_OK(DoImportArray(*array.children[0], field.child(0)));
         }
-        num_bytes_ += offsets.size_bytes();
+        num_bytes_ += static_cast<int64_t>(offsets.size_bytes());
         num_buffers_++;
         break;
       }
@@ -579,11 +582,11 @@ class ImportedBatch : public ReadOnlyBatch {
         std::span<const int64_t> offsets;
         QUIVER_RETURN_NOT_OK(GetBufferOrEmptySpan<const int64_t>(
             array, /*index=*/1, length, /*width=*/1, field.layout, &offsets));
-        arrays_.push_back(
+        arrays_.emplace_back(
             ReadOnlyInt64ContiguousListArray{validity, offsets, length + 1});
         // There is a child array here but the only variations of int64 list are binary
         // and we handle those specially below
-        num_bytes_ += offsets.size_bytes();
+        num_bytes_ += static_cast<int64_t>(offsets.size_bytes());
         num_buffers_++;
         break;
       }
@@ -604,9 +607,9 @@ class ImportedBatch : public ReadOnlyBatch {
       std::span<const uint8_t> str_validity;
       QUIVER_RETURN_NOT_OK(GetBufferOrEmptySpan<const uint8_t>(
           array, /*index=*/2, data_length, /*width=*/1, field.layout, &str_data));
-      num_bytes_ += str_data.size_bytes();
+      num_bytes_ += static_cast<int64_t>(str_data.size_bytes());
       num_buffers_ += 2;
-      arrays_.emplace_back(ReadOnlyFlatArray(str_validity, str_data, length));
+      arrays_.emplace_back(ReadOnlyFlatArray(str_validity, str_data, 1, length));
     } else if (field.format == "Z" || field.format == "U") {
       ReadOnlyInt64ContiguousListArray list_arr;
       QUIVER_RETURN_NOT_OK(util::get_or_raise(&arrays_.back(), &list_arr));
@@ -615,9 +618,9 @@ class ImportedBatch : public ReadOnlyBatch {
       std::span<const uint8_t> str_validity;
       QUIVER_RETURN_NOT_OK(GetBufferOrEmptySpan<const uint8_t>(
           array, /*index=*/2, data_length, /*width=*/1, field.layout, &str_data));
-      num_bytes_ += str_data.size_bytes();
+      num_bytes_ += static_cast<int64_t>(str_data.size_bytes());
       num_buffers_ += 2;
-      arrays_.emplace_back(ReadOnlyFlatArray(str_validity, str_data, length));
+      arrays_.emplace_back(ReadOnlyFlatArray(str_validity, str_data, 1, length));
     }
     return Status::OK();
   }
@@ -681,7 +684,7 @@ class BasicBatch : public Batch {
     }
   }
 
-  ReadOnlyArray array(int32_t index) const override {
+  [[nodiscard]] ReadOnlyArray array(int32_t index) const override {
     std::size_t buffer_offset = array_idx_to_buffers_[index];
     switch (schema_->types[index].layout) {
       case LayoutKind::kFlat: {
@@ -697,7 +700,7 @@ class BasicBatch : public Batch {
         return {};
     }
   }
-  Array mutable_array(int32_t index) {
+  Array mutable_array(int32_t index) override {
     std::size_t buffer_offset = array_idx_to_buffers_[index];
     switch (schema_->types[index].layout) {
       case LayoutKind::kFlat: {
@@ -714,12 +717,14 @@ class BasicBatch : public Batch {
     }
   }
 
-  const SimpleSchema* schema() const override { return schema_; }
-  int64_t length() const override { return length_; }
-  int64_t num_bytes() const override { return num_bytes_; }
-  int32_t num_buffers() const override { return static_cast<int32_t>(buffers_.size()); }
+  [[nodiscard]] const SimpleSchema* schema() const override { return schema_; }
+  [[nodiscard]] int64_t length() const override { return length_; }
+  [[nodiscard]] int64_t num_bytes() const override { return num_bytes_; }
+  [[nodiscard]] int32_t num_buffers() const override {
+    return static_cast<int32_t>(buffers_.size());
+  }
 
-  Status ExportToArrow(ArrowArray* out) && override {
+  Status ExportToArrow(ArrowArray* /*out*/) && override {
     return Status::NotImplemented("TODO");
   }
 
@@ -737,7 +742,8 @@ class BasicBatch : public Batch {
   }
 
  private:
-  std::span<const uint8_t> BufferToSpan(std::size_t index, uint64_t num_bytes) const {
+  [[nodiscard]] std::span<const uint8_t> BufferToSpan(std::size_t index,
+                                                      uint64_t num_bytes) const {
     const std::vector<uint8_t>& buffer = buffers_[index];
     DCHECK_LE(num_bytes, buffer.size());
     return {buffer.begin(), num_bytes};
@@ -749,7 +755,6 @@ class BasicBatch : public Batch {
   }
 
   const SimpleSchema* schema_;
-  double grow_factor_ = 2.0;
   int64_t length_ = 0;
   int64_t num_bytes_ = 0;
   std::vector<std::size_t> array_idx_to_buffers_;
