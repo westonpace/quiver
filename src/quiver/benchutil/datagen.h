@@ -10,7 +10,7 @@
 #include "quiver/util/arrow_util.h"
 namespace quiver::bench {
 
-void assert_ok(const arrow::Status& status);
+void AssertOk(const arrow::Status& status);
 const std::shared_ptr<ArrowSchema>& GetFlatDataSchema();
 util::OwnedArrowArray GenFlatData(int32_t target_num_bytes);
 

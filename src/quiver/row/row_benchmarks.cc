@@ -27,7 +27,6 @@ TestData CreateTestData() {
   TestData test_data;
 
   const std::shared_ptr<ArrowSchema>& batch_schema = bench::GetFlatDataSchema();
-  std::cout << "Import" << std::endl;
   SimpleSchema::ImportFromArrow(batch_schema.get(), &test_data.schema).AbortNotOk();
 
   util::OwnedArrowArray random_batch = bench::GenFlatData(kNumBytes);
@@ -51,11 +50,12 @@ void BM_EncodeRows(benchmark::State& state) {
 
   const TestData& test_data = GetTestData();
 
-  std::unique_ptr<row::RowQueueAppendingProducer> encoder;
-  row::RowQueueAppendingProducer::Create(&test_data.schema, &sink, &encoder).AbortNotOk();
+  std::unique_ptr<row::RowEncoder> encoder;
+  row::RowEncoder::Create(&test_data.schema, &sink, &encoder).AbortNotOk();
 
   for (auto _iter : state) {
-    encoder->Append(*test_data.batch).AbortNotOk();
+    int64_t row_id = -1;
+    encoder->Append(*test_data.batch, &row_id).AbortNotOk();
     benchmark::DoNotOptimize(buf);
     benchmark::ClobberMemory();
   }

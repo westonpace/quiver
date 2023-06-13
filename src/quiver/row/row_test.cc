@@ -28,20 +28,21 @@ class RowEncodingTest : public ::testing::Test {
   // Encode the entire batch, then select the entire batch, in order, and test for
   // equality to input
   void CheckFullRoundTrip(const SchemaAndBatch& data) {
-    std::unique_ptr<RowQueueAppendingProducer> encoder;
-    assert_ok(row::RowQueueAppendingProducer::Create(&data.schema, &sink_, &encoder));
-    assert_ok(encoder->Append(*data.batch));
+    std::unique_ptr<RowEncoder> encoder;
+    AssertOk(row::RowEncoder::Create(&data.schema, &sink_, &encoder));
+    int64_t row_id = -1;
+    AssertOk(encoder->Append(*data.batch, &row_id));
+    DCHECK_EQ(row_id, 0);
 
-    std::unique_ptr<RowQueueRandomAccessConsumer> decoder;
-    assert_ok(
-        row::RowQueueRandomAccessConsumer::Create(&data.schema, &source_, &decoder));
+    std::unique_ptr<RowDecoder> decoder;
+    AssertOk(row::RowDecoder::Create(&data.schema, &source_, &decoder));
 
     std::unique_ptr<Batch> output =
         Batch::CreateInitializedBasic(&data.schema, kEnoughBytesForScratch);
 
-    std::vector<int32_t> row_indices(data.batch->length());
+    std::vector<int64_t> row_indices(data.batch->length());
     std::iota(row_indices.begin(), row_indices.end(), 0);
-    assert_ok(decoder->Load({row_indices.data(), row_indices.size()}, output.get()));
+    AssertOk(decoder->Load({row_indices.data(), row_indices.size()}, output.get()));
 
     ASSERT_TRUE(output->BinaryEquals(*data.batch));
   }
@@ -58,18 +59,20 @@ TEST_F(RowEncodingTest, BasicRoundTrip) {
 
   CheckFullRoundTrip(data);
 
-  std::unique_ptr<RowQueueAppendingProducer> encoder;
-  assert_ok(row::RowQueueAppendingProducer::Create(&data.schema, &sink_, &encoder));
-  assert_ok(encoder->Append(*data.batch));
+  std::unique_ptr<RowEncoder> encoder;
+  AssertOk(row::RowEncoder::Create(&data.schema, &sink_, &encoder));
+  int64_t row_id = -1;
+  AssertOk(encoder->Append(*data.batch, &row_id));
+  DCHECK_EQ(0, row_id);
 
-  std::unique_ptr<RowQueueRandomAccessConsumer> decoder;
-  assert_ok(row::RowQueueRandomAccessConsumer::Create(&data.schema, &source_, &decoder));
+  std::unique_ptr<RowDecoder> decoder;
+  AssertOk(row::RowDecoder::Create(&data.schema, &source_, &decoder));
 
   std::unique_ptr<Batch> output =
       Batch::CreateInitializedBasic(&data.schema, 1024LL * 1024LL);
 
-  std::vector<int32_t> row_indices = {2, 0};
-  assert_ok(decoder->Load({row_indices.data(), row_indices.size()}, output.get()));
+  std::vector<int64_t> row_indices = {2, 0};
+  AssertOk(decoder->Load({row_indices.data(), row_indices.size()}, output.get()));
 
   SchemaAndBatch expected =
       TestBatch({Int8Array({{}, 1}), Int64Array({1000, {}}), Float32Array({{}, {}})});

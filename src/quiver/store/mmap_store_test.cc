@@ -36,7 +36,7 @@ TEST(MmapStore, Invalid) {
 
 TEST(MmapStore, Default) {
   std::unique_ptr<MmapStore> mmap_store;
-  ASSERT_OK(MmapStore::Create({}, &mmap_store));
+  AssertOk(MmapStore::Create({}, &mmap_store));
   ASSERT_GT(mmap_store->block_size_bytes(), 0);
   ASSERT_GT(mmap_store->total_size_bytes(), 0);
 }

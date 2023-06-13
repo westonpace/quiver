@@ -15,6 +15,7 @@ option(QUIVER_BUILD_TESTS "Build tests" OFF)
 option(QUIVER_BUILD_BENCHMARKS "Build benchmarks" OFF)
 option(QUIVER_BUNDLE "Create bundled quiver.h and quiver.c" OFF)
 option(QUIVER_BUILD_ID "A string identifying this build" OFF)
+option(QUIVER_PYTHON_BINDINGS "Build python bindings" OFF)
 
 if (NOT QUIVER_BUILD_ID)
     string(RANDOM LENGTH 10 QUIVER_BUILD_ID)
@@ -60,7 +61,9 @@ add_library(
     src/quiver/core/array.cc
     src/quiver/core/io.cc
     src/quiver/hash/hasher.cc
+    src/quiver/hashtable/hashtable.cc
     src/quiver/map/equality.cc
+    src/quiver/map/hashmap.cc
     src/quiver/row/row_p.cc
     src/quiver/store/mmap_store.cc
     src/quiver/util/arrow_util.cc
@@ -72,12 +75,12 @@ add_library(
     src/quiver/util/status.cc
     src/quiver/util/string_builder.cc)
 
+set_target_properties(quiver PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(quiver PROPERTIES VERSION ${QUIVER_VERSION})
 set_target_properties(quiver PROPERTIES SOVERSION ${QUIVER_VERSION_MAJOR})
 set_target_properties(quiver PROPERTIES PUBLIC_HEADER quiver/include/lib.h)
 
 target_include_directories(quiver PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_include_directories(quiver PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/generated)
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
         target_compile_options(
@@ -117,6 +120,10 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 #     endif()
 endif()
 
+if(QUIVER_PYTHON_BINDINGS)
+    add_subdirectory(src/python)
+endif()
+
 if(QUIVER_BUILD_TESTS)
     add_executable(
         core_test
@@ -128,8 +135,14 @@ if(QUIVER_BUILD_TESTS)
         src/quiver/testutil/gen.cc
         src/quiver/testutil/test_util.cc)
     add_executable(
+        hashtable_test
+        src/quiver/hashtable/hashtable_test.cc
+        src/quiver/testutil/gen.cc
+        src/quiver/testutil/test_util.cc)
+    add_executable(
         map_test
         src/quiver/map/equality_test.cc
+        src/quiver/map/hashmap_test.cc
         src/quiver/testutil/gen.cc
         src/quiver/testutil/test_util.cc)
     add_executable(
@@ -148,6 +161,7 @@ if(QUIVER_BUILD_TESTS)
     
     target_link_libraries(core_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
     target_link_libraries(hash_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
+    target_link_libraries(hashtable_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
     target_link_libraries(map_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
     target_link_libraries(row_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
     target_link_libraries(store_test PRIVATE quiver GTest::gtest_main)
@@ -156,6 +170,7 @@ if(QUIVER_BUILD_TESTS)
     include(GoogleTest)
     gtest_discover_tests(core_test)
     gtest_discover_tests(hash_test)
+    gtest_discover_tests(hashtable_test)
     gtest_discover_tests(map_test)
     gtest_discover_tests(row_test)
     gtest_discover_tests(store_test)

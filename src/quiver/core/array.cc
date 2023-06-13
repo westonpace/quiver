@@ -10,6 +10,7 @@
 #include <sstream>
 #include <string_view>
 
+#include "quiver/core/arrow.h"
 #include "quiver/util/bit_util.h"
 #include "quiver/util/finally.h"
 #include "quiver/util/logging_p.h"
@@ -366,6 +367,10 @@ bool BinaryEqualsWithSelection(std::span<const uint8_t> lhs, std::span<const uin
   return true;
 }
 
+bool IsAllSet(std::span<const uint8_t> span) {
+  return std::find(span.begin(), span.end(), 0) == span.end();
+}
+
 }  // namespace buffer
 
 namespace array {
@@ -458,9 +463,26 @@ bool BinaryEquals(ReadOnlyArray lhs, ReadOnlyArray rhs) {
       if (lhs_flat.width_bytes != rhs_flat.width_bytes) {
         return false;
       }
-      if (!buffer::BinaryEquals(lhs_flat.validity, rhs_flat.validity)) {
-        return false;
+      if (lhs_flat.validity.empty()) {
+        if (!rhs_flat.validity.empty()) {
+          // There is no left validity so the right validity better be all 1s
+          if (!buffer::IsAllSet(rhs_flat.validity)) {
+            return false;
+          }
+        }
+      } else if (rhs_flat.validity.empty()) {
+        // There is no right validity so the left validity better be all 1s
+        if (!buffer::IsAllSet(lhs_flat.validity)) {
+          return false;
+        }
+      } else {
+        // Either both validities are empty or both validities are set and
+        // so we can just compare them
+        if (!buffer::BinaryEquals(lhs_flat.validity, rhs_flat.validity)) {
+          return false;
+        }
       }
+
       if (lhs_flat.validity.empty()) {
         // Implicit validity, so we can just compare the values buffers
         return buffer::BinaryEquals(lhs_flat.values, rhs_flat.values);
@@ -471,6 +493,22 @@ bool BinaryEquals(ReadOnlyArray lhs, ReadOnlyArray rhs) {
     }
     default:
       DCHECK(false) << "Not yet impelemented";
+      return false;
+  }
+}
+
+bool HasNulls(ReadOnlyArray arr) {
+  switch (ArrayLayout(arr)) {
+    case LayoutKind::kFlat: {
+      ReadOnlyFlatArray flat_array = std::get<ReadOnlyFlatArray>(arr);
+      if (flat_array.validity.empty()) {
+        return false;
+      }
+      return std::find(flat_array.validity.begin(), flat_array.validity.end(), 0) !=
+             flat_array.validity.end();
+    }
+    default:
+      DCHECK(false) << "Not yet implemented";
       return false;
   }
 }
@@ -516,8 +554,133 @@ Status SimpleSchema::ImportFromArrow(ArrowSchema* schema, SimpleSchema* out,
   return Status::OK();
 }
 
-Status SimpleSchema::ExportToArrow(ArrowSchema* /*out*/) {  // NOLINT
-  return Status::NotImplemented("TODO");
+struct ExportedSchemaData {
+  std::string format;
+  std::string name;
+  std::string metadata;
+  std::vector<ArrowSchema> children;
+  std::vector<ArrowSchema*> child_pointers;
+};
+
+void ReleaseSchema(ArrowSchema* schema) {
+  if (schema->release != nullptr) {
+    schema->release(schema);
+  }
+}
+
+void ReleaseExportedSchema(ArrowSchema* schema) {
+  if (schema->release == nullptr) {
+    return;
+  }
+  for (int64_t i = 0; i < schema->n_children; ++i) {
+    struct ArrowSchema* child = schema->children[i];
+    ReleaseSchema(child);
+    DCHECK_EQ(child->release, nullptr)
+        << "Child release callback should have marked it released";
+  }
+  struct ArrowSchema* dict = schema->dictionary;
+  if (dict != nullptr) {
+    ReleaseSchema(dict);
+    DCHECK_EQ(dict->release, nullptr)
+        << "Dictionary release callback should have marked it released";
+  }
+  DCHECK_NE(schema->private_data, nullptr);
+  delete reinterpret_cast<ExportedSchemaData*>(schema->private_data);
+
+  schema->release = nullptr;
+}
+
+Status ExportFlatField(const FieldDescriptor& /*field*/, ExportedSchemaData* /*data*/,
+                       ArrowSchema* /*out*/) {
+  // We don't need to do anything extra since there are no children
+  return Status::OK();
+}
+
+Status ExportSchemaField(const FieldDescriptor& field, ArrowSchema* out) {
+  auto* data = new ExportedSchemaData();
+  out->private_data = reinterpret_cast<void*>(data);
+  out->release = ReleaseExportedSchema;
+
+  data->name = field.name;
+  data->metadata = field.metadata;
+  data->format = field.format;
+
+  out->metadata = data->metadata.c_str();
+  out->format = data->format.c_str();
+  out->name = data->name.c_str();
+  out->dictionary = nullptr;
+  out->children = nullptr;
+  out->n_children = 0;
+  out->flags = 0;
+  if (field.nullable) {
+    out->flags |= ARROW_FLAG_NULLABLE;
+  }
+  if (field.map_keys_sorted) {
+    out->flags |= ARROW_FLAG_MAP_KEYS_SORTED;
+  }
+  if (field.dict_indices_ordered) {
+    out->flags |= ARROW_FLAG_DICTIONARY_ORDERED;
+  }
+  switch (field.layout) {
+    case LayoutKind::kFlat:
+      return ExportFlatField(field, data, out);
+    default:
+      return Status::NotImplemented("Exporting schema field with layout ",
+                                    layout::to_string(field.layout));
+  }
+}
+
+Status SimpleSchema::ExportToArrow(ArrowSchema* out) const {
+  auto* data = new ExportedSchemaData();
+  out->private_data = reinterpret_cast<void*>(data);
+  out->release = ReleaseExportedSchema;
+
+  data->children.resize(num_fields());
+
+  for (int64_t i = 0; i < num_fields(); ++i) {
+    QUIVER_RETURN_NOT_OK(ExportSchemaField(top_level_types[i], &data->children[i]));
+    data->child_pointers.push_back(&data->children[i]);
+  }
+
+  data->format = "+s";
+  data->metadata = "";
+  data->name = "";
+  out->dictionary = nullptr;
+  out->metadata = data->metadata.c_str();
+  out->format = data->format.c_str();
+  out->name = data->name.c_str();
+  out->n_children = static_cast<int32_t>(top_level_types.size());
+  out->children = data->child_pointers.data();
+  out->flags = 0;
+  return Status::OK();
+}
+
+SimpleSchema SimpleSchema::AllColumnsFrom(const SimpleSchema& left,
+                                          const SimpleSchema& right) {
+  std::vector<FieldDescriptor> all_types;
+  all_types.reserve(left.types.size() + right.types.size());
+  all_types.insert(all_types.end(), left.types.begin(), left.types.end());
+  all_types.insert(all_types.end(), right.types.begin(), right.types.end());
+
+  std::vector<FieldDescriptor> all_top_level_types;
+  all_top_level_types.reserve(left.top_level_types.size() + right.top_level_types.size());
+  all_top_level_types.insert(all_top_level_types.end(), left.top_level_types.begin(),
+                             left.top_level_types.end());
+  all_top_level_types.insert(all_top_level_types.end(), right.top_level_types.begin(),
+                             right.top_level_types.end());
+
+  std::vector<int32_t> all_top_level_indices;
+  all_top_level_indices.reserve(left.top_level_indices.size() +
+                                right.top_level_indices.size());
+  all_top_level_indices.insert(all_top_level_indices.end(),
+                               left.top_level_indices.begin(),
+                               left.top_level_indices.end());
+  all_top_level_indices.insert(all_top_level_indices.end(),
+                               right.top_level_indices.begin(),
+                               right.top_level_indices.end());
+
+  return {std::move(all_types), std::move(all_top_level_types),
+          std::move(all_top_level_indices)};
 }
 
 template <typename T>
@@ -765,7 +928,8 @@ class BasicBatch : public Batch {
         return FlatArray{validity, values, type.data_width_bytes, length_};
       }
       default:
-        DCHECK(false) << "Not yet implemented";
+        DCHECK(false) << "Not yet implemented: mutable_array with layout("
+                      << layout::to_string(schema_->types[index].layout) << ")";
         return {};
     }
   }
@@ -777,8 +941,95 @@ class BasicBatch : public Batch {
     return static_cast<int32_t>(buffers_.size());
   }
 
-  Status ExportToArrow(ArrowArray* /*out*/) && override {
-    return Status::NotImplemented("TODO");
+  struct ExportedArrayData {
+    std::vector<ArrowArray> children;
+    std::vector<ArrowArray*> child_pointers;
+    std::vector<std::vector<uint8_t>> buffers;
+    std::vector<const void*> buffer_pointers;
+  };
+
+  static void ReleaseArray(ArrowArray* array) {
+    if (array->release != nullptr) {
+      array->release(array);
+    }
+  }
+
+  static void ReleaseExportedArray(ArrowArray* array) {
+    if (array->release == nullptr) {
+      return;
+    }
+    for (int64_t i = 0; i < array->n_children; ++i) {
+      struct ArrowArray* child = array->children[i];
+      ReleaseArray(child);
+      DCHECK_EQ(child->release, nullptr)
+          << "Child release callback should have marked it released";
+    }
+    DCHECK_NE(array->private_data, nullptr);
+    delete reinterpret_cast<ExportedArrayData*>(array->private_data);
+
+    array->release = nullptr;
+  }
+
+  Status ExportFlatArray(int array_index, const FieldDescriptor& /*field*/,
+                         ExportedArrayData* data, ArrowArray* out) {
+    out->n_children = 0;
+    out->children = nullptr;
+    out->n_buffers = 2;
+    out->length = length_;
+
+    data->buffers.reserve(2);
+    data->buffer_pointers.reserve(2);
+    std::size_t buffer_offset = array_idx_to_buffers_[array_index];
+    data->buffers.push_back(std::move(buffers_[buffer_offset]));
+    data->buffer_pointers.push_back(data->buffers.back().data());
+    data->buffers.push_back(std::move(buffers_[buffer_offset + 1]));
+    data->buffer_pointers.push_back(data->buffers.back().data());
+
+    out->buffers = data->buffer_pointers.data();
+    return Status::OK();
+  }
+
+  Status ExportArray(int array_index, const FieldDescriptor& field, ArrowArray* out) {
+    auto* data = new ExportedArrayData();
+    out->private_data = reinterpret_cast<void*>(data);
+    out->release = ReleaseExportedArray;
+
+    out->offset = 0;
+    out->null_count = -1;
+    out->dictionary = nullptr;
+
+    switch (field.layout) {
+      case LayoutKind::kFlat:
+        return ExportFlatArray(array_index, field, data, out);
+      default:
+        return Status::NotImplemented("ExportArray with layout ",
+                                      layout::to_string(field.layout));
+    }
+  }
+
+  Status ExportToArrow(ArrowArray* out) && override {
+    auto* data = new ExportedArrayData();
+    out->private_data = reinterpret_cast<void*>(data);
+    out->release = ReleaseExportedArray;
+
+    data->children.resize(schema_->num_fields());
+
+    for (int64_t i = 0; i < schema_->num_fields(); ++i) {
+      QUIVER_RETURN_NOT_OK(
+          ExportArray(i, schema_->top_level_types[i], &data->children[i]));
+      data->child_pointers.push_back(&data->children[i]);
+    }
+    data->buffer_pointers.push_back(nullptr);
+    out->children = data->child_pointers.data();
+    out->n_children = static_cast<int64_t>(data->child_pointers.size());
+    out->buffers = data->buffer_pointers.data();
+    out->n_buffers = 1;
+    out->dictionary = nullptr;
+    out->length = length_;
+    out->null_count = 0;
+    out->offset = 0;
+
+    return Status::OK();
   }
 
   void SetLength(int64_t new_length) override { length_ = new_length; }

@@ -19,8 +19,8 @@ TEST(BinaryEquality, Basic) {
 
   std::unique_ptr<EqualityComparer> comparer =
       EqualityComparer::MakeSimpleBinaryEqualityComparer();
-  assert_ok(comparer->CompareEquality(data.batch->array(0), data.batch->array(1),
-                                      out_arr->values));
+  AssertOk(comparer->CompareEquality(data.batch->array(0), data.batch->array(1),
+                                     out_arr->values));
 
   ASSERT_TRUE(array::BinaryEquals(expected.batch->array(0), array::ArrayView(*out_arr)));
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "quiver/core/array.h"
 
 namespace quiver::util {
@@ -10,8 +12,27 @@ template <typename T>
 class local_ptr {
  public:
   ~local_ptr();
+  local_ptr(const local_ptr&) = delete;
+  local_ptr& operator=(const local_ptr&) = delete;
+  local_ptr(local_ptr&& other) noexcept {
+    data_ = other.data_;
+    allocator_ = other.allocator_;
+    allocation_id_ = other.allocation_id_;
+    size_ = other.size_;
+    other.allocator_ = nullptr;
+  }
+  local_ptr& operator=(local_ptr&& other) noexcept {
+    data_ = other.data_;
+    allocator_ = other.allocator_;
+    allocation_id_ = other.allocation_id_;
+    size_ = other.size_;
+    other.allocator_ = nullptr;
+    return *this;
+  }
+
   T& operator*() { return data_; }
   T* operator->() { return &data_; }
+  T* get() { return &data_; }
 
  private:
   local_ptr(T data, LocalAllocator* allocator, int32_t allocation_id, int64_t size)
@@ -30,6 +51,15 @@ class LocalAllocator {
   local_ptr<FlatArray> AllocateFlatArray(int32_t data_width_bytes, int64_t num_elements,
                                          bool allocate_validity = true);
 
+  template <typename T>
+  local_ptr<std::span<T>> AllocateSpan(int64_t num_elements) {
+    int64_t num_bytes = num_elements * sizeof(T);
+    uint8_t* buffer = AllocateBuffer(num_bytes);
+    std::span<T> span = {reinterpret_cast<T*>(buffer),
+                         static_cast<std::size_t>(num_elements)};
+    return local_ptr<std::span<T>>(span, this, allocation_id_counter_++, num_bytes);
+  }
+
  private:
   static constexpr int64_t kChunkSize = 1024LL * 1024LL;
   static constexpr int64_t kInitialSize = 16LL * kChunkSize;
@@ -46,7 +76,9 @@ class LocalAllocator {
 
 template <typename T>
 local_ptr<T>::~local_ptr() {
-  allocator_->Free(allocation_id_, size_);
+  if (allocator_ != nullptr) {
+    allocator_->Free(allocation_id_, size_);
+  }
 }
 
 }  // namespace quiver::util

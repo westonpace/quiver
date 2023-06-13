@@ -46,11 +46,11 @@
     EXPECT_THAT(_st.ToString(), (matcher));                           \
   } while (false)
 
-#define ASSERT_OK(expr)                                                                \
+#define AssertOk(expr)                                                                 \
   for (::quiver::Status _st = ::quiver::internal::GenericToStatus((expr)); !_st.ok();) \
   FAIL() << "'" QUIVER_STRINGIFY(expr) "' failed with " << _st.ToString()
 
-#define ASSERT_OK_NO_THROW(expr) ASSERT_NO_THROW(ASSERT_OK(expr))
+#define AssertOk_NO_THROW(expr) ASSERT_NO_THROW(AssertOk(expr))
 
 #define QUIVER_EXPECT_OK(expr)                                           \
   do {                                                                   \
@@ -78,9 +78,9 @@
   handle_error(status_name.status());                                      \
   lhs = std::move(status_name).ValueOrDie();
 
-#define ASSERT_OK_AND_ASSIGN(lhs, rexpr) \
-  ASSIGN_OR_HANDLE_ERROR_IMPL(           \
-      ASSERT_OK, QUIVER_ASSIGN_OR_RAISE_NAME(_error_or_value, __COUNTER__), lhs, rexpr);
+#define AssertOk_AND_ASSIGN(lhs, rexpr) \
+  ASSIGN_OR_HANDLE_ERROR_IMPL(          \
+      AssertOk, QUIVER_ASSIGN_OR_RAISE_NAME(_error_or_value, __COUNTER__), lhs, rexpr);
 
 #define ASSIGN_OR_ABORT(lhs, rexpr)                                                      \
   ASSIGN_OR_HANDLE_ERROR_IMPL(ABORT_NOT_OK,                                              \
@@ -92,10 +92,10 @@
                               QUIVER_ASSIGN_OR_RAISE_NAME(_error_or_value, __COUNTER__), \
                               lhs, rexpr);
 
-#define ASSERT_OK_AND_EQ(expected, expr)        \
-  do {                                          \
-    ASSERT_OK_AND_ASSIGN(auto _actual, (expr)); \
-    ASSERT_EQ(expected, _actual);               \
+#define AssertOk_AND_EQ(expected, expr)        \
+  do {                                         \
+    AssertOk_AND_ASSIGN(auto _actual, (expr)); \
+    ASSERT_EQ(expected, _actual);              \
   } while (0)
 
 // A generalized version of GTest's SCOPED_TRACE that takes arbitrary arguments.

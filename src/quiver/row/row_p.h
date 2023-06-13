@@ -30,20 +30,39 @@
 
 namespace quiver::row {
 
-class RowQueueAppendingProducer {
+/// Converts from a columnar format to a row based format and appends to storage
+///
+/// The row encoder both converts data from columnar to row format and inserts
+/// data into storage.  It does this in a single pass to prevent making an extra
+/// copy of the data.
+///
+/// The row encoder inserts data in an appending fashion.  Each call inserts additional
+/// rows into the storage.
+class RowEncoder {
  public:
-  virtual ~RowQueueAppendingProducer() = default;
-  virtual Status Append(const ReadOnlyBatch& batch) = 0;
+  virtual ~RowEncoder() = default;
+  /// Convert and insert a batch of data
+  ///
+  /// \param batch The batch to convert
+  /// \param out_row_id The id of the first inserted row, used for lookup in the decoder
+  virtual Status Append(const ReadOnlyBatch& batch, int64_t* out_row_id) = 0;
   static Status Create(const SimpleSchema* schema, StreamSink* sink,
-                       std::unique_ptr<RowQueueAppendingProducer>* out);
+                       std::unique_ptr<RowEncoder>* out);
 };
 
-class RowQueueRandomAccessConsumer {
+/// Retrieve and decode rows from a row-based storage
+///
+/// The row decoder both fetches rows from storage and decodes them back into a columnar
+/// format.
+///
+/// The row decoder requires random access to the source as it is expected that it will
+/// need to fetch rows in random access.
+class RowDecoder {
  public:
-  virtual ~RowQueueRandomAccessConsumer() = default;
-  virtual Status Load(std::span<int32_t> indices, Batch* out) = 0;
+  virtual ~RowDecoder() = default;
+  virtual Status Load(std::span<int64_t> indices, Batch* out) = 0;
   static Status Create(const SimpleSchema* schema, RandomAccessSource* source,
-                       std::unique_ptr<RowQueueRandomAccessConsumer>* out);
+                       std::unique_ptr<RowDecoder>* out);
 };
 
 }  // namespace quiver::row

@@ -7,29 +7,30 @@
 #include <gtest/gtest.h>
 
 #include "quiver/util/arrow_util.h"
+#include "quiver/util/local_allocator_p.h"
 #include "quiver/util/logging_p.h"
 
 namespace quiver {
-void throw_not_ok(const arrow::Status& status) {
+void ThrowNotOk(const arrow::Status& status) {
   if (!status.ok()) {
     throw std::runtime_error(status.ToString());
   }
 }
 
-void assert_ok(const arrow::Status& status, std::source_location loc) {
+void AssertOk(const arrow::Status& status, std::source_location loc) {
   if (!status.ok()) {
     ADD_FAILURE_AT(loc.file_name(), loc.line())
         << "expected an ok status but received " << status.ToString();
   }
 }
 
-void throw_not_ok(const Status& status) {
+void ThrowNotOk(const Status& status) {
   if (!status.ok()) {
     throw std::runtime_error(status.ToString());
   }
 }
 
-void assert_ok(const Status& status, std::source_location loc) {
+void AssertOk(const Status& status, std::source_location loc) {
   if (!status.ok()) {
     ADD_FAILURE_AT(loc.file_name(), loc.line())
         << "expected an ok status but received " << status.ToString();
@@ -39,16 +40,16 @@ void assert_ok(const Status& status, std::source_location loc) {
 template <typename BuilderType, typename CType>
 std::shared_ptr<arrow::Array> TestArray(const std::vector<std::optional<CType>>& values) {
   BuilderType builder{};
-  throw_not_ok(builder.Resize(values.size()));
+  ThrowNotOk(builder.Resize(values.size()));
   for (const auto val : values) {
     if (val.has_value()) {
-      throw_not_ok(builder.Append(*val));
+      ThrowNotOk(builder.Append(*val));
     } else {
-      throw_not_ok(builder.AppendNull());
+      ThrowNotOk(builder.AppendNull());
     }
   }
   arrow::Result<std::shared_ptr<arrow::Array>> arr = builder.Finish();
-  return throw_or_assign(arr);
+  return ThrowOrAssign(arr);
 }
 
 std::shared_ptr<arrow::Array> BoolArray(const std::vector<std::optional<bool>>& values) {
@@ -80,10 +81,56 @@ std::shared_ptr<arrow::Array> Float64Array(
   return TestArray<arrow::DoubleBuilder, double>(values);
 }
 
+template <typename BuilderType, typename CType>
+util::local_ptr<FlatArray> LocalArray(util::LocalAllocator* alloc,
+                                      const std::vector<std::optional<CType>>& values) {
+  std::shared_ptr<arrow::Array> arr = TestArray<BuilderType, CType>(values);
+  int data_width_bytes = arr->type()->byte_width();
+  bool has_validity = arr->data()->buffers[0] != nullptr;
+  util::local_ptr<FlatArray> flat_arr =
+      alloc->AllocateFlatArray(data_width_bytes, arr->length(), has_validity);
+  if (has_validity) {
+    std::memcpy(flat_arr->validity.data(), arr->data()->buffers[0]->data(),
+                arr->data()->buffers[0]->size());
+  }
+  std::memcpy(flat_arr->values.data(), arr->data()->buffers[1]->data(),
+              arr->data()->buffers[1]->size());
+  return flat_arr;
+}
+
+util::local_ptr<FlatArray> LocalBoolArray(
+    util::LocalAllocator* alloc, const std::vector<std::optional<bool>>& values) {
+  return LocalArray<arrow::BooleanBuilder, bool>(alloc, values);
+}
+util::local_ptr<FlatArray> LocalInt8Array(
+    util::LocalAllocator* alloc, const std::vector<std::optional<int8_t>>& values) {
+  return LocalArray<arrow::Int8Builder, int8_t>(alloc, values);
+}
+util::local_ptr<FlatArray> LocalInt16Array(
+    util::LocalAllocator* alloc, const std::vector<std::optional<int16_t>>& values) {
+  return LocalArray<arrow::Int16Builder, int16_t>(alloc, values);
+}
+util::local_ptr<FlatArray> LocalInt32Array(
+    util::LocalAllocator* alloc, const std::vector<std::optional<int32_t>>& values) {
+  return LocalArray<arrow::Int32Builder, int32_t>(alloc, values);
+}
+util::local_ptr<FlatArray> LocalInt64Array(
+    util::LocalAllocator* alloc, const std::vector<std::optional<int64_t>>& values) {
+  return LocalArray<arrow::Int64Builder, int64_t>(alloc, values);
+}
+util::local_ptr<FlatArray> Float32Array(util::LocalAllocator* alloc,
+                                        const std::vector<std::optional<float>>& values) {
+  return LocalArray<arrow::FloatBuilder, float>(alloc, values);
+}
+util::local_ptr<FlatArray> Float64Array(
+    util::LocalAllocator* alloc, const std::vector<std::optional<double>>& values) {
+  return LocalArray<arrow::DoubleBuilder, double>(alloc, values);
+}
+
 SchemaAndBatch TestBatch(std::vector<std::shared_ptr<arrow::Array>> arrays) {
   std::shared_ptr<arrow::RecordBatch> record_batch;
   if (arrays.empty()) {
-    record_batch = throw_or_assign(arrow::RecordBatch::MakeEmpty(arrow::schema({})));
+    record_batch = ThrowOrAssign(arrow::RecordBatch::MakeEmpty(arrow::schema({})));
   } else {
     std::vector<std::shared_ptr<arrow::Field>> fields;
     int64_t length = -1;
@@ -101,13 +148,13 @@ SchemaAndBatch TestBatch(std::vector<std::shared_ptr<arrow::Array>> arrays) {
   util::OwnedArrowArray c_data_arr = util::AllocateArrowArray();
   util::OwnedArrowSchema c_data_schema = util::AllocateArrowSchema();
 
-  throw_not_ok(
+  ThrowNotOk(
       arrow::ExportRecordBatch(*record_batch, c_data_arr.get(), c_data_schema.get()));
 
   SchemaAndBatch schema_and_batch;
-  throw_not_ok(
+  ThrowNotOk(
       SimpleSchema::ImportFromArrow(c_data_schema.get(), &schema_and_batch.schema));
-  throw_not_ok(
+  ThrowNotOk(
       ImportBatch(c_data_arr.get(), &schema_and_batch.schema, &schema_and_batch.batch));
 
   return schema_and_batch;

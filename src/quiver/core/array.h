@@ -87,7 +87,10 @@ struct SimpleSchema {
   /// By setting `consume_schema` to false the C data schema is never consumed.
   static Status ImportFromArrow(ArrowSchema* schema, SimpleSchema* out,
                                 bool consume_schema = true);
-  Status ExportToArrow(ArrowSchema* out);
+
+  static SimpleSchema AllColumnsFrom(const SimpleSchema& left, const SimpleSchema& right);
+
+  Status ExportToArrow(ArrowSchema* out) const;
 
   [[nodiscard]] bool Equals(const SimpleSchema& other) const;
 };
@@ -178,6 +181,7 @@ bool BinaryEquals(std::span<const uint8_t> lhs, std::span<const uint8_t> rhs);
 bool BinaryEqualsWithSelection(std::span<const uint8_t> lhs, std::span<const uint8_t> rhs,
                                int32_t element_size_bytes,
                                std::span<const uint8_t> selection);
+bool IsAllSet(std::span<const uint8_t> span);
 }  // namespace buffer
 
 namespace array {
@@ -190,6 +194,7 @@ void PrintArray(ReadOnlyArray array, const FieldDescriptor& type, int indentatio
                 int max_chars, std::ostream& out);
 std::string ToString(ReadOnlyArray array, const FieldDescriptor& type);
 bool BinaryEquals(ReadOnlyArray lhs, ReadOnlyArray rhs);
+bool HasNulls(ReadOnlyArray arr);
 
 }  // namespace array
 

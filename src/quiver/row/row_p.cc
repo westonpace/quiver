@@ -244,9 +244,9 @@ class ContiguousListEncoder {
   uint8_t bitmask;
 };
 
-class RowQueueAppendingProducerImpl : public RowQueueAppendingProducer {
+class RowEncoderImpl : public RowEncoder {
  public:
-  RowQueueAppendingProducerImpl(RowSchema schema, StreamSink* sink)
+  RowEncoderImpl(RowSchema schema, StreamSink* sink)
       : schema_(std::move(schema)), sink_(sink) {}
 
   Status Initialize() {
@@ -266,7 +266,9 @@ class RowQueueAppendingProducerImpl : public RowQueueAppendingProducer {
     return Status::OK();
   }
 
-  Status Append(const ReadOnlyBatch& batch) override {
+  Status Append(const ReadOnlyBatch& batch, int64_t* out_row_id) override {
+    *out_row_id = row_id_counter_;
+    row_id_counter_ += batch.length();
     // Prepare
     for (std::size_t flat_idx = 0; flat_idx < flat_col_indices.size(); flat_idx++) {
       int32_t field_idx = flat_col_indices[flat_idx];
@@ -301,6 +303,8 @@ class RowQueueAppendingProducerImpl : public RowQueueAppendingProducer {
  private:
   RowSchema schema_;
   StreamSink* sink_;
+  int64_t row_id_counter_ = 0;
+
   std::vector<int32_t> flat_col_indices;
   std::vector<FlatEncoder> flat_encoders;
   std::vector<FlatEncoder> flat_encoders_may_have_nulls;
@@ -312,13 +316,11 @@ class RowQueueAppendingProducerImpl : public RowQueueAppendingProducer {
       clist_int64_encoders;
 };
 
-Status RowQueueAppendingProducer::Create(
-    const SimpleSchema* schema, StreamSink* sink,
-    std::unique_ptr<RowQueueAppendingProducer>* out) {
+Status RowEncoder::Create(const SimpleSchema* schema, StreamSink* sink,
+                          std::unique_ptr<RowEncoder>* out) {
   RowSchema row_schema(sizeof(int64_t), sizeof(int64_t));
   QUIVER_RETURN_NOT_OK(row_schema.Initialize(*schema));
-  auto impl =
-      std::make_unique<RowQueueAppendingProducerImpl>(std::move(row_schema), sink);
+  auto impl = std::make_unique<RowEncoderImpl>(std::move(row_schema), sink);
   QUIVER_RETURN_NOT_OK(impl->Initialize());
   *out = std::move(impl);
   return Status::OK();
@@ -370,9 +372,9 @@ class FlatDecoder {
   uint8_t validity_bit_mask_{};
 };
 
-class RowQueueRandomAccessConsumerImpl : public RowQueueRandomAccessConsumer {
+class RowDecoderImpl : public RowDecoder {
  public:
-  RowQueueRandomAccessConsumerImpl(RowSchema schema, RandomAccessSource* source)
+  RowDecoderImpl(RowSchema schema, RandomAccessSource* source)
       : schema_(std::move(schema)), source_(source) {}
 
   Status Initialize() {
@@ -393,12 +395,12 @@ class RowQueueRandomAccessConsumerImpl : public RowQueueRandomAccessConsumer {
     return Status::OK();
   }
 
-  Status Load(std::span<int32_t> indices, Batch* out) override {
+  Status Load(std::span<int64_t> indices, Batch* out) override {
     out->SetLength(static_cast<int32_t>(indices.size()));
     for (auto& flat_decoder : flat_decoders_) {
       flat_decoder.Prepare(static_cast<int32_t>(indices.size()), out);
     }
-    for (int32_t index : indices) {
+    for (int64_t index : indices) {
       int64_t field_offset = static_cast<int64_t>(schema_.fixed_length) * index;
       for (auto& flat_decoder : flat_decoders_) {
         flat_decoder.DecodeValue(source_, field_offset);
@@ -436,13 +438,11 @@ class RowQueueRandomAccessConsumerImpl : public RowQueueRandomAccessConsumer {
   std::vector<uint8_t> validity_scratch_;
 };
 
-Status RowQueueRandomAccessConsumer::Create(
-    const SimpleSchema* schema, RandomAccessSource* source,
-    std::unique_ptr<RowQueueRandomAccessConsumer>* out) {
+Status RowDecoder::Create(const SimpleSchema* schema, RandomAccessSource* source,
+                          std::unique_ptr<RowDecoder>* out) {
   RowSchema row_schema(sizeof(int64_t), sizeof(int64_t));
   QUIVER_RETURN_NOT_OK(row_schema.Initialize(*schema));
-  auto impl =
-      std::make_unique<RowQueueRandomAccessConsumerImpl>(std::move(row_schema), source);
+  auto impl = std::make_unique<RowDecoderImpl>(std::move(row_schema), source);
   QUIVER_RETURN_NOT_OK(impl->Initialize());
   *out = std::move(impl);
   return Status::OK();

@@ -16,7 +16,7 @@
 
 namespace quiver::bench {
 
-void assert_ok(const arrow::Status& status) {
+void AssertOk(const arrow::Status& status) {
   if (!status.ok()) {
     status.Abort();
   }
@@ -61,7 +61,7 @@ int32_t CalculateBytesPerRow(const arrow::Schema& schema) {
 
 util::OwnedArrowSchema CreateFlatDataSchema() {
   util::OwnedArrowSchema schema = util::AllocateArrowSchema();
-  assert_ok(arrow::ExportSchema(*kSampleFlatSchema, schema.get()));
+  AssertOk(arrow::ExportSchema(*kSampleFlatSchema, schema.get()));
   return schema;
 }
 
@@ -90,7 +90,7 @@ util::OwnedArrowArray GenFlatData(int32_t target_num_bytes) {
       arrow::RecordBatch::Make(kSampleFlatSchema, num_rows, std::move(arrays));
 
   util::OwnedArrowArray arrow_array = util::AllocateArrowArray();
-  assert_ok(arrow::ExportRecordBatch(*batch, arrow_array.get()));
+  AssertOk(arrow::ExportRecordBatch(*batch, arrow_array.get()));
   return arrow_array;
 }
 
