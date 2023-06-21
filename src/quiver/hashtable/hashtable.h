@@ -11,7 +11,6 @@ class HashTable {
   /// Encodes hashes into the hashtable
   ///
   /// \param hashes The hashes to encode
-  /// \param hash_width The width of each hash in bytes
   /// \param row_ids The row ids to encode
   ///              (must be the same length as hashes)
   virtual void Encode(std::span<const int64_t> hashes,
@@ -19,8 +18,8 @@ class HashTable {
 
   /// Decodes hashes into the hashtable
   /// \param hashes The hashes to decode
-  /// \param hash_width The width of each hash in bytes
   /// \param row_ids_out The decoded row ids
+  /// \param length_out The number of decoded rows
   /// \param hash_idx_offset The hash index to start at (will be updated)
   /// \param bucket_idx_offset The index in the bucket at hash_idx_offset to start at
   /// \return true if all row ids have been returned.  False if further paging required

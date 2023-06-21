@@ -825,7 +825,7 @@ class ImportedBatch : public ReadOnlyBatch {
           array, /*index=*/2, data_length, /*width=*/1, field.layout, &str_data));
       num_bytes_ += static_cast<int64_t>(str_data.size_bytes());
       num_buffers_ += 2;
-      arrays_.emplace_back(ReadOnlyFlatArray(str_validity, str_data, 1, length));
+      arrays_.emplace_back(ReadOnlyFlatArray{str_validity, str_data, 1, length});
     } else if (field.format == "Z" || field.format == "U") {
       ReadOnlyInt64ContiguousListArray list_arr;
       QUIVER_RETURN_NOT_OK(util::get_or_raise(&arrays_.back(), &list_arr));
@@ -836,7 +836,7 @@ class ImportedBatch : public ReadOnlyBatch {
           array, /*index=*/2, data_length, /*width=*/1, field.layout, &str_data));
       num_bytes_ += static_cast<int64_t>(str_data.size_bytes());
       num_buffers_ += 2;
-      arrays_.emplace_back(ReadOnlyFlatArray(str_validity, str_data, 1, length));
+      arrays_.emplace_back(ReadOnlyFlatArray{str_validity, str_data, 1, length});
     }
     return Status::OK();
   }
@@ -1014,7 +1014,7 @@ class BasicBatch : public Batch {
 
     data->children.resize(schema_->num_fields());
 
-    for (int64_t i = 0; i < schema_->num_fields(); ++i) {
+    for (int32_t i = 0; i < schema_->num_fields(); ++i) {
       QUIVER_RETURN_NOT_OK(
           ExportArray(i, schema_->top_level_types[i], &data->children[i]));
       data->child_pointers.push_back(&data->children[i]);
@@ -1037,7 +1037,10 @@ class BasicBatch : public Batch {
   void ResizeBufferBytes(int32_t array_index, int32_t buffer_index,
                          int64_t num_bytes) override {
     std::size_t buffer_offset = array_idx_to_buffers_[array_index];
-    buffers_[buffer_offset + buffer_index].resize(num_bytes);
+    std::size_t buffer_idx = buffer_offset + buffer_index;
+    auto old_size = static_cast<int64_t>(buffers_[buffer_idx].size());
+    buffers_[buffer_idx].resize(num_bytes);
+    num_bytes_ += num_bytes - old_size;
   }
 
   int64_t buffer_capacity(int32_t array_index, int32_t buffer_index) override {

@@ -1,14 +1,24 @@
 #include "quiver/hashtable/hashtable.h"
 
-#include <map>
 #include <memory>
+#include <unordered_map>
 
 #include "quiver/core/array.h"
+#include "quiver/util/literals.h"
 #include "quiver/util/logging_p.h"
 
 namespace quiver::hashtable {
 
+constexpr std::size_t kInitialBucketCount = util::kMi;
+
+struct IdentityHash {
+  std::size_t operator()(const int64_t& value) const { return value; }
+};
+
 class StlHashTable : public HashTable {
+ public:
+  StlHashTable() : map_(kInitialBucketCount) {}
+
   void Encode(std::span<const int64_t> hashes,
               std::span<const int64_t> row_ids) override {
     DCHECK_EQ(hashes.size(), row_ids.size());
@@ -65,7 +75,7 @@ class StlHashTable : public HashTable {
   };
 
  private:
-  std::multimap<int64_t, int64_t> map_;
+  std::unordered_multimap<int64_t, int64_t, IdentityHash> map_;
 };
 
 std::unique_ptr<HashTable> HashTable::MakeStl() {

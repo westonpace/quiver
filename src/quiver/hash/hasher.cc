@@ -17,7 +17,6 @@ class IdentityHasherImpl : public Hasher {
           "The identity hasher cannot hash a batch with no columns.  The first column "
           "must be the hashes.");
     }
-    ReadOnlyArray hash_arr = batch->array(0);
     const FieldDescriptor& hash_type = batch->schema()->top_level_types[0];
     if (hash_type.layout != LayoutKind::kFlat) {
       return Status::Invalid(

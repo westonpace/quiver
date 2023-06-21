@@ -59,7 +59,9 @@ add_library(
     STATIC
     src/quiver/lib.cc
     src/quiver/core/array.cc
+    src/quiver/core/builder.cc
     src/quiver/core/io.cc
+    src/quiver/datagen/datagen.cc
     src/quiver/hash/hasher.cc
     src/quiver/hashtable/hashtable.cc
     src/quiver/map/equality.cc
@@ -72,6 +74,7 @@ add_library(
     src/quiver/util/logging_p.cc
     src/quiver/util/memory.cc
     src/quiver/util/memory_pool.cc
+    src/quiver/util/random.cc
     src/quiver/util/status.cc
     src/quiver/util/string_builder.cc)
 
@@ -79,6 +82,8 @@ set_target_properties(quiver PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(quiver PROPERTIES VERSION ${QUIVER_VERSION})
 set_target_properties(quiver PROPERTIES SOVERSION ${QUIVER_VERSION_MAJOR})
 set_target_properties(quiver PROPERTIES PUBLIC_HEADER quiver/include/lib.h)
+
+target_precompile_headers(quiver PRIVATE src/quiver/pch.h)
 
 target_include_directories(quiver PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -100,7 +105,9 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
             -Werror
             -Wextra
             -Wdocumentation
-            -Wshorten-64-to-32)
+            -Wshorten-64-to-32
+            -fsanitize=undefined)
+        target_link_options(quiver PRIVATE -fsanitize=undefined)
     endif()
     if(QUIVER_CODE_COVERAGE)
         append_coverage_compiler_flags_to_target(quiver)
@@ -187,8 +194,12 @@ if(QUIVER_BUILD_BENCHMARKS)
     target_include_directories(quiver_benchutil PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_link_libraries(quiver_benchutil PRIVATE Arrow::arrow_shared quiver)
 
+    add_executable(hash_benchmarks src/quiver/hash/hasher_benchmark.cc)
+    add_executable(hashtable_benchmarks src/quiver/hashtable/hashtable_benchmark.cc)
     add_executable(row_benchmarks src/quiver/row/row_benchmarks.cc)
 
+    target_link_libraries(hash_benchmarks quiver quiver_benchutil Arrow::arrow_shared benchmark::benchmark)
+    target_link_libraries(hashtable_benchmarks quiver quiver_benchutil Arrow::arrow_shared benchmark::benchmark)
     target_link_libraries(row_benchmarks quiver quiver_benchutil Arrow::arrow_shared benchmark::benchmark)
 endif()
 

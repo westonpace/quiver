@@ -7,6 +7,7 @@ namespace quiver::hash {
 
 class Hasher {
  public:
+  virtual ~Hasher() = default;
   /// <summary>
   /// Compute hashes for the values in batch
   /// </summary>
@@ -30,5 +31,7 @@ class Hasher {
   /// a hash with some external library.
   static std::unique_ptr<Hasher> CreateIdentityHasher();
 };
+
+constexpr int32_t HashWidthBytes() { return sizeof(int64_t); }
 
 }  // namespace quiver::hash

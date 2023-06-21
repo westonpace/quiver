@@ -37,10 +37,10 @@ enum class QuiverLogLevel : int {
 // of 'msg' followed by the status.
 #define QUIVER_CHECK_OK_PREPEND(to_call, msg, level)                 \
   do {                                                               \
-    ::quiver::Status _s = (to_call);                                 \
-    QUIVER_CHECK_OR_LOG(_s.ok(), level)                              \
+    ::quiver::Status _status = (to_call);                            \
+    QUIVER_CHECK_OR_LOG(_status.ok(), level)                         \
         << "Operation failed: " << QUIVER_STRINGIFY(to_call) << "\n" \
-        << (msg) << ": " << _s.ToString();                           \
+        << (msg) << ": " << _status.ToString();                      \
   } while (false)
 
 // If the status is bad, CHECK immediately, appending the status to the
@@ -157,7 +157,6 @@ class QuiverLog : public QuiverLogBase {
   ///
   /// \param app_name The app name which starts the log.
   /// \param severity_threshold Logging threshold for the program.
-  /// \param logDir Logging output file name. If empty, the log won't output to file.
   static void StartQuiverLog(const std::string& app_name,
                              QuiverLogLevel severity_threshold = QuiverLogLevel::kInfo);
 
@@ -200,7 +199,7 @@ class NullLog {
  public:
   /// The no-op output operator.
   ///
-  /// @param [in] t
+  /// @param [in] value
   ///   The object to send into the nil sink.
   /// @return Reference to the updated object.
   template <class T>
