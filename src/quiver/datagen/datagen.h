@@ -26,6 +26,8 @@ class DataGenerator {
   virtual ~DataGenerator() = default;
   virtual DataGenerator* Field(std::unique_ptr<FieldGenerator> field_gen) = 0;
   virtual DataGenerator* NFieldsOf(int n, std::unique_ptr<FieldGenerator> field_gen) = 0;
+  virtual DataGenerator* FlatFieldsWithNBytesTotalWidth(
+      int n, int min_data_width_bytes, int max_data_width_bytes = -1) = 0;
   virtual GeneratedData NRows(int64_t num_rows) = 0;
 };
 std::unique_ptr<DataGenerator> Gen();

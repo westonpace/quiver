@@ -62,6 +62,19 @@ class DataGeneratorImpl : public DataGenerator {
     return this;
   }
 
+  DataGenerator* FlatFieldsWithNBytesTotalWidth(int n, int min_data_width_bytes,
+                                                int max_data_width_bytes) override {
+    int bytes_remaining = n;
+    while (bytes_remaining > 0) {
+      int next_width = util::RandInt(min_data_width_bytes, max_data_width_bytes);
+      next_width = std::min(next_width, bytes_remaining);
+      bytes_remaining -= next_width;
+      owned_field_builders_.push_back(Flat(next_width));
+      field_builders_.push_back(owned_field_builders_.back().get());
+    }
+    return this;
+  }
+
   GeneratedData NRows(int64_t num_rows) override {
     GeneratedData out;
     std::unique_ptr<SchemaBuilder> schema_builder = SchemaBuilder::Start();

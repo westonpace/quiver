@@ -69,24 +69,13 @@ void BM_EncodeRows(benchmark::State& state) {
   state.SetBytesProcessed(int64_t(state.iterations()) * int64_t(kNumBytes));
 }
 
-void BM_DecodeRows(benchmark::State& state) {
-  constexpr int64_t kTotalSize = 256_KiLL;
-  constexpr int32_t kHashWidthBytes = sizeof(int64_t);
-  constexpr int32_t kMinFieldWidth = 1;
-  constexpr int32_t kMaxFieldWidth = 8;
-
-  auto num_fields = static_cast<int32_t>(state.range(0));
-
-  datagen::GeneratedData data =
-      datagen::Gen()
-          ->NFieldsOf(num_fields, datagen::Flat(kMinFieldWidth, kMaxFieldWidth))
-          ->NRows(kTotalSize);
-
+void BenchDecode(const datagen::GeneratedData& data, benchmark::State& state) {
   util::LocalAllocator local_alloc;
+  int64_t num_rows = data.batch->length();
 
   {
     local_alloc.AllocateSpan<uint8_t>(data.batch->num_bytes() * 2LL +
-                                      kTotalSize * static_cast<int64_t>(sizeof(int64_t)));
+                                      num_rows * static_cast<int64_t>(sizeof(int64_t)));
   }
 
   util::local_ptr<std::span<uint8_t>> scratch =
@@ -104,7 +93,7 @@ void BM_DecodeRows(benchmark::State& state) {
   row::RowDecoder::Create(&data.schema, &source, &decoder).AbortNotOk();
 
   util::local_ptr<std::span<int64_t>> indices =
-      local_alloc.AllocateSpan<int64_t>(kTotalSize);
+      local_alloc.AllocateSpan<int64_t>(num_rows);
   std::iota(indices->begin(), indices->end(), 0);
   util::Shuffle(*indices);
   std::unique_ptr<Batch> batch =
@@ -113,7 +102,35 @@ void BM_DecodeRows(benchmark::State& state) {
   for (auto _iter : state) {
     decoder->Load(*indices, batch.get()).AbortNotOk();
   }
-  state.SetBytesProcessed(int64_t(state.iterations()) * data.batch->num_bytes());
+}
+
+void BM_DecodeRows(benchmark::State& state) {
+  constexpr int64_t kTotalSizeBytes = 256_MiLL;
+  constexpr int32_t kMinFieldWidth = 1;
+  constexpr int32_t kMaxFieldWidth = 8;
+
+  auto row_width_bytes = static_cast<int32_t>(state.range(0));
+  auto num_rows = kTotalSizeBytes / row_width_bytes;
+
+  datagen::GeneratedData data = datagen::Gen()
+                                    ->FlatFieldsWithNBytesTotalWidth(
+                                        row_width_bytes, kMinFieldWidth, kMaxFieldWidth)
+                                    ->NRows(num_rows);
+  BenchDecode(data, state);
+  state.SetBytesProcessed(int64_t(state.iterations()) * kTotalSizeBytes);
+}
+
+void BM_DecodeRowsOneWideField(benchmark::State& state) {
+  constexpr int64_t kTotalSizeBytes = 256_MiLL;
+
+  auto row_width_bytes = static_cast<int32_t>(state.range(0));
+  auto num_rows = kTotalSizeBytes / row_width_bytes;
+
+  datagen::GeneratedData data =
+      datagen::Gen()->Field(datagen::Flat(row_width_bytes))->NRows(num_rows);
+
+  BenchDecode(data, state);
+  state.SetBytesProcessed(int64_t(state.iterations()) * kTotalSizeBytes);
 }
 
 }  // namespace
@@ -122,5 +139,18 @@ void BM_DecodeRows(benchmark::State& state) {
 
 // Register the function as a benchmark
 BENCHMARK(quiver::BM_EncodeRows);
-BENCHMARK(quiver::BM_DecodeRows)->Arg(4)->Arg(16)->Arg(64)->Arg(256);
+BENCHMARK(quiver::BM_DecodeRows)
+    ->ArgName("RowWidthBytes")
+    ->Arg(4)
+    ->Arg(256)
+    ->Arg(2048)
+    ->Arg(4096)
+    ->Arg(16384);
+BENCHMARK(quiver::BM_DecodeRowsOneWideField)
+    ->ArgName("RowWidthBytes")
+    ->Arg(4)
+    ->Arg(256)
+    ->Arg(2048)
+    ->Arg(4096)
+    ->Arg(16384);
 BENCHMARK_MAIN();
