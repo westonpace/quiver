@@ -63,6 +63,10 @@ class RowDecoder {
   virtual Status Load(std::span<int64_t> indices, Batch* out) = 0;
   static Status Create(const SimpleSchema* schema, RandomAccessSource* source,
                        std::unique_ptr<RowDecoder>* out);
+  static Status CreateStaged(const SimpleSchema* schema, RandomAccessSource* source,
+                             std::unique_ptr<RowDecoder>* out);
+  static Status CreateIoUring(const SimpleSchema* schema, std::FILE* file,
+                              std::unique_ptr<RowDecoder>* out);
 };
 
 }  // namespace quiver::row

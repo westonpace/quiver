@@ -17,9 +17,31 @@
 
 #include "quiver/row/row_p.h"
 
-#include <memory>
+#include <linux/io_uring.h>
+#include <sys/mman.h>
 
+#include <atomic>
+#include <iostream>
+#include <memory>
+#include <thread>
+
+#include "quiver/core/array.h"
+#include "quiver/core/io.h"
 #include "quiver/util/variant_p.h"
+
+/*
+ * System call wrappers provided since glibc does not yet
+ * provide wrappers for io_uring system calls.
+ * */
+int io_uring_setup(unsigned entries, struct io_uring_params* params) {
+  return (int)syscall(__NR_io_uring_setup, entries, params);
+}
+
+int io_uring_enter(int ring_fd, unsigned int to_submit, unsigned int min_complete,
+                   unsigned int flags) {
+  return (int)syscall(__NR_io_uring_enter, ring_fd, to_submit, min_complete, flags, NULL,
+                      0);
+}
 
 namespace quiver::row {
 
@@ -345,8 +367,14 @@ class FlatDecoder {
     validity_bit_mask_ = 1;
   }
 
-  void DecodeValue(BufferSource src, RandomAccessSource* source, int64_t src_offset) {
+  template <typename BufferLikeSource>
+  void DecodeValue(BufferLikeSource& src, int64_t src_offset) {
     src.CopyDataInto(values_itr_, src_offset, field_->data_width_bytes);
+    values_itr_ += field_->data_width_bytes;
+  }
+
+  void DecodeStagedValue(const uint8_t* src) {
+    std::memcpy(values_itr_, src, field_->data_width_bytes);
     values_itr_ += field_->data_width_bytes;
   }
 
@@ -395,7 +423,8 @@ class RowDecoderImpl : public RowDecoder {
     return Status::OK();
   }
 
-  Status DoLoad(BufferSource src, std::span<int64_t> indices, Batch* out) {
+  template <typename BufferLikeSource>
+  Status DoLoad(BufferLikeSource src, std::span<int64_t> indices, Batch* out) {
     out->SetLength(static_cast<int32_t>(indices.size()));
     for (auto& flat_decoder : flat_decoders_) {
       flat_decoder.Prepare(static_cast<int32_t>(indices.size()), out);
@@ -403,12 +432,12 @@ class RowDecoderImpl : public RowDecoder {
     for (int64_t index : indices) {
       int64_t field_offset = static_cast<int64_t>(schema_.fixed_length) * index;
       for (auto& flat_decoder : flat_decoders_) {
-        flat_decoder.DecodeValue(src, source_, field_offset);
+        flat_decoder.DecodeValue(src, field_offset);
         field_offset += flat_decoder.fixed_width();
       }
       // Load validity bytes
       src.CopyDataInto(validity_scratch_.data(), field_offset,
-                        static_cast<int32_t>(validity_scratch_.size()));
+                       static_cast<int32_t>(validity_scratch_.size()));
       auto flat_decoders_itr = flat_decoders_.begin();
       uint8_t bitmask = 1;
       auto validity_itr = validity_scratch_.begin();
@@ -434,6 +463,8 @@ class RowDecoderImpl : public RowDecoder {
     switch (source_->kind()) {
       case RandomAccessSourceKind::kBuffer:
         return DoLoad(source_->AsBuffer(), indices, out);
+      case quiver::RandomAccessSourceKind::kFile:
+        return DoLoad(source_->AsFile(), indices, out);
       default:
         DCHECK(false) << "NotYetImplemented";
         return Status::OK();
@@ -448,11 +479,349 @@ class RowDecoderImpl : public RowDecoder {
   std::vector<uint8_t> validity_scratch_;
 };
 
+class StagedRowDecoderImpl : public RowDecoder {
+ public:
+  StagedRowDecoderImpl(RowSchema schema, RandomAccessSource* source)
+      : schema_(std::move(schema)), source_(source) {}
+
+  Status Initialize() {
+    for (std::size_t field_idx = 0; field_idx < schema_.schema->top_level_types.size();
+         field_idx++) {
+      const auto& field = schema_.schema->top_level_types[field_idx];
+      switch (field.layout) {
+        case LayoutKind::kFlat:
+          flat_decoders_.emplace_back(&field, static_cast<int>(field_idx));
+          break;
+        default:
+          return Status::Invalid("No row based encoder yet provided for layout ",
+                                 layout::to_string(field.layout));
+      }
+    }
+    int32_t num_validity_bytes = bit_util::CeilDiv(schema_.schema->num_fields(), 8);
+    validity_scratch_.resize(num_validity_bytes);
+    return Status::OK();
+  }
+
+  template <typename BufferLikeSource>
+  Status DoLoad(BufferLikeSource src, std::span<int64_t> indices, Batch* out) {
+    std::vector<uint8_t> staged_space(schema_.fixed_length);
+    out->SetLength(static_cast<int32_t>(indices.size()));
+    for (auto& flat_decoder : flat_decoders_) {
+      flat_decoder.Prepare(static_cast<int32_t>(indices.size()), out);
+    }
+    for (int64_t index : indices) {
+      int64_t row_offset = static_cast<int64_t>(schema_.fixed_length) * index;
+      src.CopyDataInto(staged_space.data(), row_offset, schema_.fixed_length);
+      const uint8_t* itr = staged_space.data();
+      for (auto& flat_decoder : flat_decoders_) {
+        flat_decoder.DecodeStagedValue(itr);
+        itr += flat_decoder.fixed_width();
+      }
+      std::memcpy(validity_scratch_.data(), itr,
+                  static_cast<int32_t>(validity_scratch_.size()));
+      auto flat_decoders_itr = flat_decoders_.begin();
+      uint8_t bitmask = 1;
+      auto validity_itr = validity_scratch_.begin();
+      while (flat_decoders_itr != flat_decoders_.end()) {
+        bool valid = (bitmask & *validity_itr) != 0;
+        if (!valid) {
+          flat_decoders_itr->DecodeNull();
+        } else {
+          flat_decoders_itr->DecodeValid();
+        }
+        bitmask <<= 1;
+        if (bitmask == 0) {
+          bitmask = 1;
+          validity_itr++;
+        }
+        flat_decoders_itr++;
+      }
+    }
+    return Status::OK();
+  }
+
+  Status Load(std::span<int64_t> indices, Batch* out) override {
+    switch (source_->kind()) {
+      case RandomAccessSourceKind::kBuffer:
+        return DoLoad(source_->AsBuffer(), indices, out);
+      case quiver::RandomAccessSourceKind::kFile:
+        return DoLoad(source_->AsFile(), indices, out);
+      default:
+        DCHECK(false) << "NotYetImplemented";
+        return Status::OK();
+    }
+  }
+
+ private:
+  RowSchema schema_;
+  RandomAccessSource* source_;
+
+  std::vector<FlatDecoder> flat_decoders_;
+  std::vector<uint8_t> validity_scratch_;
+};
+
+class IoUringSource {
+ public:
+  IoUringSource(int file_descriptor, int32_t queue_depth)
+      : file_descriptor_(file_descriptor), queue_depth_(queue_depth) {}
+
+  void Init() {
+    struct io_uring_params params;
+    memset(&params, 0, sizeof(params));
+    ring_descriptor_ = io_uring_setup(queue_depth_, &params);
+    DCHECK_GE(ring_descriptor_, 0) << "io_uring_setup failed";
+    /*
+     * io_uring communication happens via 2 shared kernel-user space ring
+     * buffers, which can be jointly mapped with a single mmap() call in
+     * kernels >= 5.4.
+     */
+    uint64_t sring_sz = params.sq_off.array + params.sq_entries * sizeof(unsigned);
+    uint64_t cring_sz =
+        params.cq_off.cqes + params.cq_entries * sizeof(struct io_uring_cqe);
+    /* Rather than check for kernel version, the recommended way is to
+     * check the features field of the io_uring_params structure, which is a
+     * bitmask. If IORING_FEAT_SINGLE_MMAP is set, we can do away with the
+     * second mmap() call to map in the completion ring separately.
+     */
+    if ((params.features & IORING_FEAT_SINGLE_MMAP) != 0U) {
+      if (cring_sz > sring_sz) {
+        sring_sz = cring_sz;
+      }
+      cring_sz = sring_sz;
+    }
+    /* Map in the submission and completion queue ring buffers.
+     *  Kernels < 5.4 only map in the submission queue, though.
+     */
+    sq_ptr_ = reinterpret_cast<std::byte*>(mmap(nullptr, sring_sz, PROT_READ | PROT_WRITE,
+                                                MAP_SHARED | MAP_POPULATE,
+                                                ring_descriptor_, IORING_OFF_SQ_RING));
+    DCHECK_NE(sq_ptr_, MAP_FAILED) << "sq mmap failed";
+
+    if ((params.features & IORING_FEAT_SINGLE_MMAP) != 0U) {
+      cq_ptr_ = sq_ptr_;
+    } else {
+      /* Map in the completion queue ring buffer in older kernels separately */
+      cq_ptr_ = reinterpret_cast<std::byte*>(
+          mmap(nullptr, cring_sz, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
+               ring_descriptor_, IORING_OFF_CQ_RING));
+      DCHECK_NE(cq_ptr_, MAP_FAILED) << "cq mmap failed";
+    }
+    /* Save useful fields for later easy reference */
+    sring_tail_ = reinterpret_cast<std::atomic<uint32_t>*>(sq_ptr_ + params.sq_off.tail);
+    sring_mask_ = reinterpret_cast<uint32_t*>(sq_ptr_ + params.sq_off.ring_mask);
+    sring_array_ = reinterpret_cast<uint32_t*>(sq_ptr_ + params.sq_off.array);
+    /* Map in the submission queue entries array */
+    sqes_ = reinterpret_cast<io_uring_sqe*>(mmap(
+        nullptr, params.sq_entries * sizeof(struct io_uring_sqe), PROT_READ | PROT_WRITE,
+        MAP_SHARED | MAP_POPULATE, ring_descriptor_, IORING_OFF_SQES));
+    DCHECK_NE(sqes_, MAP_FAILED) << "sqes mmap failed";
+    /* Save useful fields for later easy reference */
+    cring_head_ = reinterpret_cast<std::atomic<uint32_t>*>(cq_ptr_ + params.cq_off.head);
+    cring_tail_ = reinterpret_cast<uint32_t*>(cq_ptr_ + params.cq_off.tail);
+    cring_mask_ = reinterpret_cast<uint32_t*>(cq_ptr_ + params.cq_off.ring_mask);
+    cqes_ = reinterpret_cast<io_uring_cqe*>(cq_ptr_ + params.cq_off.cqes);
+  }
+
+  void StartRead(int64_t offset, int32_t len, uint8_t* buf) {
+    /* Add our submission queue entry to the tail of the SQE ring buffer */
+    uint32_t tail = *sring_tail_;
+    uint32_t index = tail & *sring_mask_;
+    io_uring_sqe* sqe = &sqes_[index];
+    /* Fill in the parameters required for the read or write operation */
+    sqe->opcode = IORING_OP_READ;
+    sqe->fd = file_descriptor_;
+    sqe->addr = reinterpret_cast<intptr_t>(buf);
+    sqe->len = len;
+    sqe->off = offset;
+    sring_array_[index] = index;
+    tail++;
+    /* Update the tail */
+    std::atomic_store_explicit<uint32_t>(sring_tail_, tail, std::memory_order_release);
+    int ret = io_uring_enter(ring_descriptor_, 1, 0, 0);
+    DCHECK_EQ(ret, 0) << "io_uring_enter failed";
+  }
+
+  void FinishRead() {
+    struct io_uring_cqe* cqe;
+    /* Read barrier */
+    uint32_t head;
+    while (true) {
+      head = std::atomic_load_explicit(cring_head_, std::memory_order_acquire);
+      /*
+       * Remember, this is a ring buffer. If head == tail, it means that the
+       * buffer is empty.
+       * */
+      if (head != *cring_tail_) {
+        break;
+      }
+      std::this_thread::yield();
+    }
+    /* Get the entry */
+    cqe = &cqes_[head & (*cring_mask_)];
+    DCHECK_EQ(cqe->res, 0) << "Error: " << strerror(abs(cqe->res));
+    head++;
+    /* Write barrier so that update to the head are made visible */
+    std::atomic_store_explicit(cring_head_, head, std::memory_order_release);
+  }
+
+ private:
+  int file_descriptor_;
+  int ring_descriptor_;
+  int32_t queue_depth_;
+  std::byte* sq_ptr_;
+  std::byte* cq_ptr_;
+  std::atomic<uint32_t>* sring_tail_;
+  uint32_t* sring_mask_;
+  uint32_t* sring_array_;
+  uint32_t* cring_tail_;
+  uint32_t* cring_mask_;
+  std::atomic<uint32_t>* cring_head_;
+  struct io_uring_sqe* sqes_;
+  struct io_uring_cqe* cqes_;
+};
+
+class IoUringDecoderImpl : public RowDecoder {
+ public:
+  constexpr static int64_t kMiniBatchSize = 32;
+  constexpr static int64_t kIoUringDepth = kMiniBatchSize * 2;
+
+  IoUringDecoderImpl(RowSchema schema, int file_descriptor)
+      : schema_(std::move(schema)),
+        file_descriptor_(file_descriptor),
+        scratch_space_(kIoUringDepth) {
+    for (int i = 0; i < kIoUringDepth; i++) {
+      scratch_space_[i].resize(schema_.fixed_length);
+    }
+  }
+
+  Status Initialize() {
+    for (std::size_t field_idx = 0; field_idx < schema_.schema->top_level_types.size();
+         field_idx++) {
+      const auto& field = schema_.schema->top_level_types[field_idx];
+      switch (field.layout) {
+        case LayoutKind::kFlat:
+          flat_decoders_.emplace_back(&field, static_cast<int>(field_idx));
+          break;
+        default:
+          return Status::Invalid("No row based encoder yet provided for layout ",
+                                 layout::to_string(field.layout));
+      }
+    }
+    int32_t num_validity_bytes = bit_util::CeilDiv(schema_.schema->num_fields(), 8);
+    validity_scratch_.resize(num_validity_bytes);
+    return Status::OK();
+  }
+
+  void StartSomeReads(IoUringSource src, std::span<int64_t> indices, int64_t* offset) {
+    int64_t remaining = static_cast<int64_t>(indices.size()) - *offset;
+    int64_t to_read = std::min(kMiniBatchSize, remaining);
+
+    for (int64_t i = 0; i < to_read; i++) {
+      int64_t loop_offset = *offset + i;
+      int64_t index = indices[loop_offset];
+      int64_t row_offset = static_cast<int64_t>(schema_.fixed_length) * index;
+      src.StartRead(row_offset, schema_.fixed_length,
+                    scratch_space_[loop_offset % kIoUringDepth].data());
+    }
+
+    *offset += to_read;
+  }
+
+  void FinishSomeReads(IoUringSource src, int64_t total_size, int64_t* offset) {
+    int64_t remaining = total_size - *offset;
+    int64_t to_read = std::min(kMiniBatchSize, remaining);
+
+    for (int64_t i = 0; i < to_read; i++) {
+      int64_t loop_offset = *offset + i;
+      src.FinishRead();
+      StagedDecode(scratch_space_[loop_offset % kIoUringDepth].data());
+    }
+
+    *offset += to_read;
+  }
+
+  void StagedDecode(const uint8_t* data) {
+    const uint8_t* itr = data;
+    for (auto& flat_decoder : flat_decoders_) {
+      flat_decoder.DecodeStagedValue(itr);
+      itr += flat_decoder.fixed_width();
+    }
+    std::memcpy(validity_scratch_.data(), itr,
+                static_cast<int32_t>(validity_scratch_.size()));
+    auto flat_decoders_itr = flat_decoders_.begin();
+    uint8_t bitmask = 1;
+    auto validity_itr = validity_scratch_.begin();
+    while (flat_decoders_itr != flat_decoders_.end()) {
+      bool valid = (bitmask & *validity_itr) != 0;
+      if (!valid) {
+        flat_decoders_itr->DecodeNull();
+      } else {
+        flat_decoders_itr->DecodeValid();
+      }
+      bitmask <<= 1;
+      if (bitmask == 0) {
+        bitmask = 1;
+        validity_itr++;
+      }
+      flat_decoders_itr++;
+    }
+  }
+
+  Status DoLoad(IoUringSource src, std::span<int64_t> indices, Batch* out) {
+    out->SetLength(static_cast<int32_t>(indices.size()));
+    for (auto& flat_decoder : flat_decoders_) {
+      flat_decoder.Prepare(static_cast<int32_t>(indices.size()), out);
+    }
+    int64_t start_offset = 0;
+    int64_t read_offset = 0;
+    StartSomeReads(src, indices, &start_offset);
+    while (read_offset < static_cast<int64_t>(indices.size())) {
+      StartSomeReads(src, indices, &start_offset);
+      FinishSomeReads(src, static_cast<int64_t>(indices.size()), &read_offset);
+    }
+    return Status::OK();
+  }
+
+  Status Load(std::span<int64_t> indices, Batch* out) override {
+    IoUringSource src(file_descriptor_, kIoUringDepth);
+    src.Init();
+    return DoLoad(src, indices, out);
+  }
+
+ private:
+  int file_descriptor_;
+  RowSchema schema_;
+
+  std::vector<FlatDecoder> flat_decoders_;
+  std::vector<uint8_t> validity_scratch_;
+  std::vector<std::vector<uint8_t>> scratch_space_;
+};
+
 Status RowDecoder::Create(const SimpleSchema* schema, RandomAccessSource* source,
                           std::unique_ptr<RowDecoder>* out) {
   RowSchema row_schema(sizeof(int64_t), sizeof(int64_t));
   QUIVER_RETURN_NOT_OK(row_schema.Initialize(*schema));
   auto impl = std::make_unique<RowDecoderImpl>(std::move(row_schema), source);
+  QUIVER_RETURN_NOT_OK(impl->Initialize());
+  *out = std::move(impl);
+  return Status::OK();
+}
+
+Status RowDecoder::CreateStaged(const SimpleSchema* schema, RandomAccessSource* source,
+                                std::unique_ptr<RowDecoder>* out) {
+  RowSchema row_schema(sizeof(int64_t), sizeof(int64_t));
+  QUIVER_RETURN_NOT_OK(row_schema.Initialize(*schema));
+  auto impl = std::make_unique<StagedRowDecoderImpl>(std::move(row_schema), source);
+  QUIVER_RETURN_NOT_OK(impl->Initialize());
+  *out = std::move(impl);
+  return Status::OK();
+}
+
+Status RowDecoder::CreateIoUring(const SimpleSchema* schema, std::FILE* file,
+                                 std::unique_ptr<RowDecoder>* out) {
+  RowSchema row_schema(sizeof(int64_t), sizeof(int64_t));
+  QUIVER_RETURN_NOT_OK(row_schema.Initialize(*schema));
+  auto impl = std::make_unique<IoUringDecoderImpl>(std::move(row_schema), fileno(file));
   QUIVER_RETURN_NOT_OK(impl->Initialize());
   *out = std::move(impl);
   return Status::OK();
