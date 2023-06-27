@@ -26,14 +26,29 @@ class StreamSink {
   std::function<uint8_t*(uint8_t*, int32_t*)> swap_;
 };
 
-class RandomAccessSource {
+class BufferSource {
  public:
-  void CopyFrom(uint8_t* dest, int64_t offset, int32_t len);
-  static RandomAccessSource WrapSpan(std::span<uint8_t> span);
+  explicit BufferSource(uint8_t* buf) : buf_(buf) {}
+  void CopyDataInto(uint8_t* dest, int64_t offset, int32_t len) {
+    std::memcpy(dest, buf_ + offset, len);
+  }
 
  private:
-  RandomAccessSource(uint8_t* buf);
   uint8_t* buf_;
+};
+
+enum class RandomAccessSourceKind { kBuffer = 0, kFile = 1 };
+
+class RandomAccessSource {
+ public:
+  explicit RandomAccessSource(RandomAccessSourceKind kind) : kind_(kind) {}
+  virtual BufferSource AsBuffer() = 0;
+  RandomAccessSourceKind kind() const { return kind_; }
+
+  static std::unique_ptr<RandomAccessSource> FromSpan(std::span<uint8_t> span);
+
+ private:
+  RandomAccessSourceKind kind_;
 };
 
 }  // namespace quiver

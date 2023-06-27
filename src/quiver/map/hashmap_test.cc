@@ -25,7 +25,7 @@ TEST(HashMap, Basic) {
   std::vector<uint8_t> scratch_buffer(kEnoughBytesForScratch);
   std::span<uint8_t> scratch{scratch_buffer.data(), scratch_buffer.size()};
   StreamSink sink = StreamSink::FromFixedSizeSpan(scratch);
-  RandomAccessSource source = RandomAccessSource::WrapSpan(scratch);
+  std::unique_ptr<RandomAccessSource> source = RandomAccessSource::FromSpan(scratch);
 
   SchemaAndBatch keys =
       TestBatch({Int64Array({1, 2, 0, 1000, 0}), Int16Array({1, 100, 1000, 57, {}})});
@@ -35,7 +35,7 @@ TEST(HashMap, Basic) {
   util::LocalAllocator local_allocator;
 
   std::unique_ptr<HashMap> hashmap;
-  AssertOk(CreateHashMap(&keys.schema, &payload.schema, &sink, &source, &hashmap));
+  AssertOk(CreateHashMap(&keys.schema, &payload.schema, &sink, source.get(), &hashmap));
 
   AssertOk(hashmap->Insert(keys.batch.get(), payload.batch.get()));
 

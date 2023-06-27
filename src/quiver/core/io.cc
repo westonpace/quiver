@@ -46,14 +46,18 @@ StreamSink StreamSink::FromFixedSizeSpan(std::span<uint8_t> span) {
           }};
 }
 
-void RandomAccessSource::CopyFrom(uint8_t* dest, int64_t offset, int32_t len) {
-  std::memcpy(dest, buf_ + offset, len);
-}
+class SpanSource : public RandomAccessSource {
+ public:
+  SpanSource(std::span<uint8_t> span) : RandomAccessSource(RandomAccessSourceKind::kBuffer), span_(span) {}
+  BufferSource AsBuffer() { return BufferSource(span_.data()); }
 
-RandomAccessSource RandomAccessSource::WrapSpan(std::span<uint8_t> span) {
-  return {span.data()};
-}
+ private:
+  std::span<uint8_t> span_;
+};
 
-RandomAccessSource::RandomAccessSource(uint8_t* buf) : buf_(buf) {}
+std::unique_ptr<RandomAccessSource> RandomAccessSource::FromSpan(
+    std::span<uint8_t> span) {
+  return std::make_unique<SpanSource>(span);
+}
 
 }  // namespace quiver

@@ -345,8 +345,8 @@ class FlatDecoder {
     validity_bit_mask_ = 1;
   }
 
-  void DecodeValue(RandomAccessSource* source, int64_t src_offset) {
-    source->CopyFrom(values_itr_, src_offset, field_->data_width_bytes);
+  void DecodeValue(BufferSource src, RandomAccessSource* source, int64_t src_offset) {
+    src.CopyDataInto(values_itr_, src_offset, field_->data_width_bytes);
     values_itr_ += field_->data_width_bytes;
   }
 
@@ -395,7 +395,7 @@ class RowDecoderImpl : public RowDecoder {
     return Status::OK();
   }
 
-  Status Load(std::span<int64_t> indices, Batch* out) override {
+  Status DoLoad(BufferSource src, std::span<int64_t> indices, Batch* out) {
     out->SetLength(static_cast<int32_t>(indices.size()));
     for (auto& flat_decoder : flat_decoders_) {
       flat_decoder.Prepare(static_cast<int32_t>(indices.size()), out);
@@ -403,11 +403,11 @@ class RowDecoderImpl : public RowDecoder {
     for (int64_t index : indices) {
       int64_t field_offset = static_cast<int64_t>(schema_.fixed_length) * index;
       for (auto& flat_decoder : flat_decoders_) {
-        flat_decoder.DecodeValue(source_, field_offset);
+        flat_decoder.DecodeValue(src, source_, field_offset);
         field_offset += flat_decoder.fixed_width();
       }
       // Load validity bytes
-      source_->CopyFrom(validity_scratch_.data(), field_offset,
+      src.CopyDataInto(validity_scratch_.data(), field_offset,
                         static_cast<int32_t>(validity_scratch_.size()));
       auto flat_decoders_itr = flat_decoders_.begin();
       uint8_t bitmask = 1;
@@ -428,6 +428,16 @@ class RowDecoderImpl : public RowDecoder {
       }
     }
     return Status::OK();
+  }
+
+  Status Load(std::span<int64_t> indices, Batch* out) override {
+    switch (source_->kind()) {
+      case RandomAccessSourceKind::kBuffer:
+        return DoLoad(source_->AsBuffer(), indices, out);
+      default:
+        DCHECK(false) << "NotYetImplemented";
+        return Status::OK();
+    }
   }
 
  private:

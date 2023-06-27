@@ -16,8 +16,8 @@ std::mt19937& Rng() {
 void Seed(int seed) { Rng().seed(seed); }
 
 uint8_t RandByte(uint8_t min, uint8_t max) {
-  std::uniform_int_distribution<uint8_t> dist(min, max);
-  return dist(Rng());
+  std::uniform_int_distribution<uint16_t> dist(min, max);
+  return static_cast<uint8_t>(dist(Rng()));
 }
 
 int32_t RandInt(int32_t min, int32_t max) {

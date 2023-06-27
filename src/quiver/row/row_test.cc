@@ -23,7 +23,7 @@ class RowEncodingTest : public ::testing::Test {
       : scratch_buffer_(kEnoughBytesForScratch),
         scratch_(scratch_buffer_.data(), scratch_buffer_.size()),
         sink_(StreamSink::FromFixedSizeSpan(scratch_)),
-        source_(RandomAccessSource::WrapSpan(scratch_)){};
+        source_(RandomAccessSource::FromSpan(scratch_)){};
 
   // Encode the entire batch, then select the entire batch, in order, and test for
   // equality to input
@@ -35,7 +35,7 @@ class RowEncodingTest : public ::testing::Test {
     DCHECK_EQ(row_id, 0);
 
     std::unique_ptr<RowDecoder> decoder;
-    AssertOk(row::RowDecoder::Create(&data.schema, &source_, &decoder));
+    AssertOk(row::RowDecoder::Create(&data.schema, source_.get(), &decoder));
 
     std::unique_ptr<Batch> output =
         Batch::CreateInitializedBasic(&data.schema, kEnoughBytesForScratch);
@@ -50,7 +50,7 @@ class RowEncodingTest : public ::testing::Test {
   std::vector<uint8_t> scratch_buffer_;
   std::span<uint8_t> scratch_;
   StreamSink sink_;
-  RandomAccessSource source_;
+  std::unique_ptr<RandomAccessSource> source_;
 };
 
 TEST_F(RowEncodingTest, BasicRoundTrip) {
@@ -66,7 +66,7 @@ TEST_F(RowEncodingTest, BasicRoundTrip) {
   DCHECK_EQ(0, row_id);
 
   std::unique_ptr<RowDecoder> decoder;
-  AssertOk(row::RowDecoder::Create(&data.schema, &source_, &decoder));
+  AssertOk(row::RowDecoder::Create(&data.schema, source_.get(), &decoder));
 
   std::unique_ptr<Batch> output =
       Batch::CreateInitializedBasic(&data.schema, 1024LL * 1024LL);
