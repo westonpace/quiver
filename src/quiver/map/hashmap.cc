@@ -65,7 +65,8 @@ class HashMapImpl : public HashMap {
         hashtable_(std::move(hashtable)) {}
 
   Status Init(StreamSink* sink, RandomAccessSource* source) {
-    QUIVER_RETURN_NOT_OK(row::RowEncoder::Create(&combined_schema_, sink, &row_encoder_));
+    QUIVER_RETURN_NOT_OK(
+        row::RowEncoder::Create(&combined_schema_, sink, false, &row_encoder_));
     return row::RowDecoder::Create(&combined_schema_, source, &row_decoder_);
   }
 

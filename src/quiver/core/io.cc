@@ -2,9 +2,13 @@
 
 #include "quiver/core/io.h"
 
+#include <fcntl.h>
+
+#include <iostream>
 #include <limits>
 #include <span>
 
+#include "quiver/core/array.h"
 #include "quiver/util/logging_p.h"
 
 namespace quiver {
@@ -19,18 +23,26 @@ StreamSink StreamSink::FromFixedSizeSpan(std::span<uint8_t> span) {
           }};
 }
 
-StreamSink StreamSink::FromFile(std::FILE* file, int32_t write_buffer_size) {
-  std::vector<uint8_t> buffer(write_buffer_size);
-  uint8_t* buf_data = buffer.data();
+StreamSink StreamSink::FromFile(int file_descriptor, int32_t write_buffer_size) {
+  uint8_t* aligned_buf;
+  int ret = posix_memalign((void**)&aligned_buf, 512, write_buffer_size);
+  DCHECK_EQ(ret, 0) << "posix_memalign failed";
+  std::shared_ptr<uint8_t> buf_ptr(aligned_buf, [](uint8_t* ptr) { free(ptr); });
+  DCHECK_EQ(reinterpret_cast<intptr_t>(buf_ptr.get()) % 512, 0)
+      << " buffer must be aligned to 512 bytes";
   std::function<uint8_t*(uint8_t*, int32_t, int32_t*)> flush =
-      [file, buf = std::move(buffer)](uint8_t* start, int32_t len,
-                                      int32_t* remaining) mutable -> uint8_t* {
-    auto written = static_cast<int32_t>(std::fwrite(start, 1, len, file));
-    DCHECK_EQ(len, written);
-    *remaining = static_cast<int32_t>(buf.size());
-    return buf.data();
+      [file_descriptor, buf = std::move(buf_ptr), size = write_buffer_size](
+          uint8_t* start, int32_t len, int32_t* remaining) mutable -> uint8_t* {
+    DCHECK_EQ(len % 512, 0);
+    DCHECK_EQ(reinterpret_cast<intptr_t>(start) % 512, 0);
+    auto written = static_cast<int32_t>(write(file_descriptor, start, len));
+    DCHECK_EQ(len, written) << "expected to write " << len << " bytes, but wrote "
+                            << written << " file=" << file_descriptor
+                            << " error: " << strerror(errno);
+    *remaining = static_cast<int32_t>(size);
+    return buf.get();
   };
-  return {buf_data, write_buffer_size, std::move(flush)};
+  return {aligned_buf, write_buffer_size, std::move(flush)};
 }
 
 class SpanSource : public RandomAccessSource {
@@ -40,7 +52,7 @@ class SpanSource : public RandomAccessSource {
   BufferSource AsBuffer() override { return BufferSource(span_.data()); }
   FileSource AsFile() override {
     QUIVER_CHECK(false) << "Invalid attempt to access SpanSource as file";
-    return FileSource(nullptr);
+    return FileSource(-1);
   }
 
  private:
@@ -49,13 +61,13 @@ class SpanSource : public RandomAccessSource {
 
 class CFileSource : public RandomAccessSource {
  public:
-  CFileSource(std::FILE* file, bool close_on_destruct)
+  CFileSource(int file_descriptor, bool close_on_destruct)
       : RandomAccessSource(RandomAccessSourceKind::kFile),
-        file_(file),
+        file_descriptor_(file_descriptor),
         close_on_destruct_(close_on_destruct) {}
   ~CFileSource() {
     if (close_on_destruct_) {
-      int err = std::fclose(file_);
+      int err = close(file_descriptor_);
       DCHECK_EQ(0, err);
     }
   }
@@ -63,10 +75,10 @@ class CFileSource : public RandomAccessSource {
     QUIVER_CHECK(false) << "Invalid attempt to access FileSource as buffer";
     return BufferSource(nullptr);
   }
-  FileSource AsFile() override { return FileSource(file_); }
+  FileSource AsFile() override { return FileSource(file_descriptor_); }
 
  private:
-  std::FILE* file_;
+  int file_descriptor_;
   bool close_on_destruct_;
 };
 
@@ -75,14 +87,15 @@ std::unique_ptr<RandomAccessSource> RandomAccessSource::FromSpan(
   return std::make_unique<SpanSource>(span);
 }
 
-std::unique_ptr<RandomAccessSource> RandomAccessSource::FromFile(std::FILE* file,
+std::unique_ptr<RandomAccessSource> RandomAccessSource::FromFile(int file_descriptor,
                                                                  bool close_on_destruct) {
-  return std::make_unique<CFileSource>(file, close_on_destruct);
+  return std::make_unique<CFileSource>(file_descriptor, close_on_destruct);
 }
 
 std::unique_ptr<RandomAccessSource> RandomAccessSource::FromPath(std::string_view path) {
-  std::FILE* file = std::fopen(path.data(), "rb");
-  return RandomAccessSource::FromFile(file, /*close_on_destruct=*/true);
+  int file_descriptor = open(path.data(), 0, O_RDONLY);
+  DCHECK_GE(file_descriptor, 0) << "failed to open file " << path;
+  return RandomAccessSource::FromFile(file_descriptor, /*close_on_destruct=*/true);
 }
 
 }  // namespace quiver

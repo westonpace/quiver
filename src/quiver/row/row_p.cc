@@ -27,6 +27,8 @@
 
 #include "quiver/core/array.h"
 #include "quiver/core/io.h"
+#include "quiver/util/bit_util.h"
+#include "quiver/util/memory.h"
 #include "quiver/util/variant_p.h"
 
 /*
@@ -76,6 +78,7 @@ struct RowSchema {
   ///
   /// If there are any varlength columns then this will be a multiple of string_alignment
   int32_t fixed_length = 0;
+  int32_t row_padding = 0;
 
   /// Fixed number of bytes per row that are used to encode null masks.
   /// Null masks indicate for a single row which of its columns are null.
@@ -193,6 +196,8 @@ Status RowSchema::Initialize(const SimpleSchema& schema) {
   null_masks_bytes_per_row = bit_util::CeilDiv(num_cols, 8);
 
   fixed_length = offset_within_row + null_masks_bytes_per_row;
+  row_padding = bit_util::PaddingNeededPwr2(fixed_length, row_alignment);
+  fixed_length += row_padding;
 
   return Status::OK();
 }
@@ -318,9 +323,12 @@ class RowEncoderImpl : public RowEncoder {
       if (bitmask != 1) {
         sink_->CopyInto(validity_byte);
       }
+      sink_->FillZero(schema_.row_padding);
     }
     return Status::OK();
   }
+
+  void Finish() override { sink_->Finish(); }
 
  private:
   RowSchema schema_;
@@ -338,9 +346,13 @@ class RowEncoderImpl : public RowEncoder {
       clist_int64_encoders;
 };
 
-Status RowEncoder::Create(const SimpleSchema* schema, StreamSink* sink,
+Status RowEncoder::Create(const SimpleSchema* schema, StreamSink* sink, bool direct_io,
                           std::unique_ptr<RowEncoder>* out) {
-  RowSchema row_schema(sizeof(int64_t), sizeof(int64_t));
+  int32_t row_alignment = sizeof(int64_t);
+  if (direct_io) {
+    row_alignment = 512;
+  }
+  RowSchema row_schema(row_alignment, sizeof(int64_t));
   QUIVER_RETURN_NOT_OK(row_schema.Initialize(*schema));
   auto impl = std::make_unique<RowEncoderImpl>(std::move(row_schema), sink);
   QUIVER_RETURN_NOT_OK(impl->Initialize());
@@ -611,9 +623,9 @@ class IoUringSource {
     sring_mask_ = reinterpret_cast<uint32_t*>(sq_ptr_ + params.sq_off.ring_mask);
     sring_array_ = reinterpret_cast<uint32_t*>(sq_ptr_ + params.sq_off.array);
     /* Map in the submission queue entries array */
-    sqes_ = reinterpret_cast<io_uring_sqe*>(mmap(
-        nullptr, params.sq_entries * sizeof(struct io_uring_sqe), PROT_READ | PROT_WRITE,
-        MAP_SHARED | MAP_POPULATE, ring_descriptor_, IORING_OFF_SQES));
+    sqes_ = reinterpret_cast<io_uring_sqe*>(
+        mmap(nullptr, params.sq_entries * sizeof(io_uring_sqe), PROT_READ | PROT_WRITE,
+             MAP_SHARED | MAP_POPULATE, ring_descriptor_, IORING_OFF_SQES));
     DCHECK_NE(sqes_, MAP_FAILED) << "sqes mmap failed";
     /* Save useful fields for later easy reference */
     cring_head_ = reinterpret_cast<std::atomic<uint32_t>*>(cq_ptr_ + params.cq_off.head);
@@ -622,26 +634,38 @@ class IoUringSource {
     cqes_ = reinterpret_cast<io_uring_cqe*>(cq_ptr_ + params.cq_off.cqes);
   }
 
-  void StartRead(int64_t offset, int32_t len, uint8_t* buf) {
+  void StartRead(int64_t offset, int32_t len,
+                 uint8_t* buf,  // NOLINT(readability-non-const-parameter)
+                 uint64_t user_data) {
     /* Add our submission queue entry to the tail of the SQE ring buffer */
     uint32_t tail = *sring_tail_;
     uint32_t index = tail & *sring_mask_;
     io_uring_sqe* sqe = &sqes_[index];
+    std::memset(sqe, 0, sizeof(io_uring_sqe));
     /* Fill in the parameters required for the read or write operation */
     sqe->opcode = IORING_OP_READ;
     sqe->fd = file_descriptor_;
-    sqe->addr = reinterpret_cast<intptr_t>(buf);
+    sqe->addr = reinterpret_cast<decltype(io_uring_sqe::addr)>(buf);
     sqe->len = len;
     sqe->off = offset;
+    sqe->user_data = user_data;
+    DCHECK_EQ(len % 512, 0);
+    DCHECK_EQ(offset % 512, 0);
+    DCHECK_EQ(sqe->addr % 512, 0);
     sring_array_[index] = index;
     tail++;
     /* Update the tail */
-    std::atomic_store_explicit<uint32_t>(sring_tail_, tail, std::memory_order_release);
+    std::atomic_store_explicit(sring_tail_, tail, std::memory_order_release);
     int ret = io_uring_enter(ring_descriptor_, 1, 0, 0);
-    DCHECK_EQ(ret, 0) << "io_uring_enter failed";
+    DCHECK_EQ(ret, 1) << "io_uring_enter failed";
   }
 
-  void FinishRead() {
+  struct ReadResult {
+    int32_t len;
+    uint64_t user_data;
+  };
+
+  ReadResult FinishRead() {
     struct io_uring_cqe* cqe;
     /* Read barrier */
     uint32_t head;
@@ -654,14 +678,18 @@ class IoUringSource {
       if (head != *cring_tail_) {
         break;
       }
+      // std::cout << "Pause" << std::endl;
       std::this_thread::yield();
     }
     /* Get the entry */
     cqe = &cqes_[head & (*cring_mask_)];
-    DCHECK_EQ(cqe->res, 0) << "Error: " << strerror(abs(cqe->res));
+    DCHECK_GE(cqe->res, 0) << "Error: " << strerror(abs(cqe->res));
+    DCHECK_EQ(cqe->flags, 0) << "Unexpted flags: " << cqe->flags;
+    ReadResult result = {cqe->res, cqe->user_data};
     head++;
     /* Write barrier so that update to the head are made visible */
     std::atomic_store_explicit(cring_head_, head, std::memory_order_release);
+    return result;
   }
 
  private:
@@ -670,14 +698,14 @@ class IoUringSource {
   int32_t queue_depth_;
   std::byte* sq_ptr_;
   std::byte* cq_ptr_;
-  std::atomic<uint32_t>* sring_tail_;
+  std::atomic_uint32_t* sring_tail_;
   uint32_t* sring_mask_;
   uint32_t* sring_array_;
   uint32_t* cring_tail_;
   uint32_t* cring_mask_;
-  std::atomic<uint32_t>* cring_head_;
-  struct io_uring_sqe* sqes_;
-  struct io_uring_cqe* cqes_;
+  std::atomic_uint32_t* cring_head_;
+  io_uring_sqe* sqes_;
+  io_uring_cqe* cqes_;
 };
 
 class IoUringDecoderImpl : public RowDecoder {
@@ -686,11 +714,15 @@ class IoUringDecoderImpl : public RowDecoder {
   constexpr static int64_t kIoUringDepth = kMiniBatchSize * 2;
 
   IoUringDecoderImpl(RowSchema schema, int file_descriptor)
-      : schema_(std::move(schema)),
-        file_descriptor_(file_descriptor),
-        scratch_space_(kIoUringDepth) {
+      : file_descriptor_(file_descriptor),
+        schema_(std::move(schema)),
+        scratch_offsets_(kIoUringDepth) {
+    scratch_space_.reserve(kIoUringDepth);
     for (int i = 0; i < kIoUringDepth; i++) {
-      scratch_space_[i].resize(schema_.fixed_length);
+      scratch_space_.push_back(util::AllocateAligned(schema.fixed_length, 512));
+      uint8_t* val = *scratch_space_.back();
+      DCHECK_EQ(reinterpret_cast<intptr_t>(val) % 512, 0);
+      scratch_offsets_[i] = -1;
     }
   }
 
@@ -719,9 +751,12 @@ class IoUringDecoderImpl : public RowDecoder {
     for (int64_t i = 0; i < to_read; i++) {
       int64_t loop_offset = *offset + i;
       int64_t index = indices[loop_offset];
+      int64_t scratch_index = loop_offset % kIoUringDepth;
+      DCHECK_EQ(scratch_offsets_[scratch_index], -1);
+      scratch_offsets_[scratch_index] = 0;
       int64_t row_offset = static_cast<int64_t>(schema_.fixed_length) * index;
-      src.StartRead(row_offset, schema_.fixed_length,
-                    scratch_space_[loop_offset % kIoUringDepth].data());
+      src.StartRead(row_offset, schema_.fixed_length, *scratch_space_[scratch_index],
+                    scratch_index);
     }
 
     *offset += to_read;
@@ -733,8 +768,14 @@ class IoUringDecoderImpl : public RowDecoder {
 
     for (int64_t i = 0; i < to_read; i++) {
       int64_t loop_offset = *offset + i;
-      src.FinishRead();
-      StagedDecode(scratch_space_[loop_offset % kIoUringDepth].data());
+      int64_t waiting_index = loop_offset % kIoUringDepth;
+      while (scratch_offsets_[waiting_index] != schema_.fixed_length) {
+        IoUringSource::ReadResult read = src.FinishRead();
+        uint32_t scratch_index = read.user_data;
+        scratch_offsets_[scratch_index] += read.len;
+      }
+      StagedDecode(*scratch_space_[waiting_index]);
+      scratch_offsets_[waiting_index] = -1;
     }
 
     *offset += to_read;
@@ -794,7 +835,8 @@ class IoUringDecoderImpl : public RowDecoder {
 
   std::vector<FlatDecoder> flat_decoders_;
   std::vector<uint8_t> validity_scratch_;
-  std::vector<std::vector<uint8_t>> scratch_space_;
+  std::vector<std::shared_ptr<uint8_t*>> scratch_space_;
+  std::vector<int32_t> scratch_offsets_;
 };
 
 Status RowDecoder::Create(const SimpleSchema* schema, RandomAccessSource* source,
@@ -817,11 +859,16 @@ Status RowDecoder::CreateStaged(const SimpleSchema* schema, RandomAccessSource* 
   return Status::OK();
 }
 
-Status RowDecoder::CreateIoUring(const SimpleSchema* schema, std::FILE* file,
-                                 std::unique_ptr<RowDecoder>* out) {
-  RowSchema row_schema(sizeof(int64_t), sizeof(int64_t));
+Status RowDecoder::CreateIoUring(const SimpleSchema* schema, int file_descriptor,
+                                 bool direct, std::unique_ptr<RowDecoder>* out) {
+  int32_t row_alignment = sizeof(int64_t);
+  if (direct) {
+    row_alignment = 512;
+  }
+  RowSchema row_schema(row_alignment, sizeof(int64_t));
   QUIVER_RETURN_NOT_OK(row_schema.Initialize(*schema));
-  auto impl = std::make_unique<IoUringDecoderImpl>(std::move(row_schema), fileno(file));
+  auto impl =
+      std::make_unique<IoUringDecoderImpl>(std::move(row_schema), file_descriptor);
   QUIVER_RETURN_NOT_OK(impl->Initialize());
   *out = std::move(impl);
   return Status::OK();

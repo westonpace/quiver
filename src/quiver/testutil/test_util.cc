@@ -6,6 +6,8 @@
 #include <arrow/record_batch.h>
 #include <gtest/gtest.h>
 
+#include <source_location>
+
 #include "quiver/util/arrow_util.h"
 #include "quiver/util/local_allocator_p.h"
 #include "quiver/util/logging_p.h"

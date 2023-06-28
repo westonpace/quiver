@@ -1,6 +1,7 @@
 #include <arrow/array/builder_primitive.h>
 #include <arrow/record_batch.h>
 #include <benchmark/benchmark.h>
+#include <fcntl.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -59,7 +60,7 @@ void BM_EncodeRows(benchmark::State& state) {
   const TestData& test_data = GetTestData();
 
   std::unique_ptr<row::RowEncoder> encoder;
-  row::RowEncoder::Create(&test_data.schema, &sink, &encoder).AbortNotOk();
+  row::RowEncoder::Create(&test_data.schema, &sink, false, &encoder).AbortNotOk();
 
   for (auto _iter : state) {
     int64_t row_id = -1;
@@ -85,7 +86,7 @@ void BenchDecodeMemory(const datagen::GeneratedData& data, benchmark::State& sta
 
   StreamSink sink = StreamSink::FromFixedSizeSpan(*scratch);
   std::unique_ptr<row::RowEncoder> encoder;
-  row::RowEncoder::Create(&data.schema, &sink, &encoder).AbortNotOk();
+  row::RowEncoder::Create(&data.schema, &sink, false, &encoder).AbortNotOk();
 
   int64_t row_id;
   encoder->Append(*data.batch, &row_id).AbortNotOk();
@@ -120,11 +121,11 @@ void BenchDecodeFile(const datagen::GeneratedData& data, benchmark::State& state
                                       num_rows * static_cast<int64_t>(sizeof(int64_t)));
   }
 
-  std::FILE* scratch_file = std::tmpfile();
+  int scratch_file = fileno(std::tmpfile());
 
   StreamSink sink = StreamSink::FromFile(scratch_file);
   std::unique_ptr<row::RowEncoder> encoder;
-  row::RowEncoder::Create(&data.schema, &sink, &encoder).AbortNotOk();
+  row::RowEncoder::Create(&data.schema, &sink, false, &encoder).AbortNotOk();
 
   int64_t row_id;
   encoder->Append(*data.batch, &row_id).AbortNotOk();
@@ -159,17 +160,21 @@ void BenchDecodeIoUring(const datagen::GeneratedData& data, benchmark::State& st
                                       num_rows * static_cast<int64_t>(sizeof(int64_t)));
   }
 
-  std::FILE* scratch_file = std::tmpfile();
+  // int scratch_file = fileno(std::tmpfile());
+  int scratch_file =
+      open("/tmp/scratch_file", O_TRUNC | O_DIRECT | O_RDWR | O_CREAT, 0644);
+  QUIVER_CHECK_GE(scratch_file, 0) << "scratch file open failed " << strerror(errno);
 
   StreamSink sink = StreamSink::FromFile(scratch_file);
   std::unique_ptr<row::RowEncoder> encoder;
-  row::RowEncoder::Create(&data.schema, &sink, &encoder).AbortNotOk();
+  row::RowEncoder::Create(&data.schema, &sink, true, &encoder).AbortNotOk();
 
   int64_t row_id;
   encoder->Append(*data.batch, &row_id).AbortNotOk();
+  encoder->Finish();
 
   std::unique_ptr<row::RowDecoder> decoder;
-  row::RowDecoder::CreateIoUring(&data.schema, scratch_file, &decoder).AbortNotOk();
+  row::RowDecoder::CreateIoUring(&data.schema, scratch_file, true, &decoder).AbortNotOk();
 
   util::local_ptr<std::span<int64_t>> indices =
       local_alloc.AllocateSpan<int64_t>(num_rows);
@@ -182,7 +187,7 @@ void BenchDecodeIoUring(const datagen::GeneratedData& data, benchmark::State& st
     decoder->Load(*indices, batch.get()).AbortNotOk();
   }
 
-  assert(std::fclose(scratch_file) == 0);
+  assert(close(scratch_file) == 0);
 }
 
 void BM_DecodeRowsMemory(benchmark::State& state) {

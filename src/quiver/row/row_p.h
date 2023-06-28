@@ -46,8 +46,9 @@ class RowEncoder {
   /// \param batch The batch to convert
   /// \param out_row_id The id of the first inserted row, used for lookup in the decoder
   virtual Status Append(const ReadOnlyBatch& batch, int64_t* out_row_id) = 0;
-  static Status Create(const SimpleSchema* schema, StreamSink* sink,
+  static Status Create(const SimpleSchema* schema, StreamSink* sink, bool direct_io,
                        std::unique_ptr<RowEncoder>* out);
+  virtual void Finish() = 0;
 };
 
 /// Retrieve and decode rows from a row-based storage
@@ -65,8 +66,8 @@ class RowDecoder {
                        std::unique_ptr<RowDecoder>* out);
   static Status CreateStaged(const SimpleSchema* schema, RandomAccessSource* source,
                              std::unique_ptr<RowDecoder>* out);
-  static Status CreateIoUring(const SimpleSchema* schema, std::FILE* file,
-                              std::unique_ptr<RowDecoder>* out);
+  static Status CreateIoUring(const SimpleSchema* schema, int file_descriptor,
+                              bool direct, std::unique_ptr<RowDecoder>* out);
 };
 
 }  // namespace quiver::row

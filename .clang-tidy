@@ -23,6 +23,7 @@ Checks: bugprone-*,
     -modernize-use-trailing-return-type,
     -readability-function-cognitive-complexity,
     -readability-magic-numbers,
+    -readability-convert-member-functions-to-static
 
 CheckOptions:
     misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic: true
