@@ -3,6 +3,7 @@
 #include <memory>
 #include <numeric>
 
+#include "quiver/accumulator/accumulator.h"
 #include "quiver/core/array.h"
 #include "quiver/core/io.h"
 #include "quiver/hash/hasher.h"
@@ -170,10 +171,45 @@ class HashMap {
   std::unique_ptr<quiver::map::HashMap> hashmap_;
 };
 
+class Accumulator {
+ public:
+  Accumulator(const pybind11::handle& schema, int32_t rows_per_batch,
+              pybind11::function callback)
+      : callback_(callback) {
+    ThrowNotOk(SchemaFromPyarrow(schema, &schema_));
+    auto q_callback = [this](std::unique_ptr<quiver::ReadOnlyBatch> q_batch) {
+      pybind11::object batch = BatchToPyarrow(std::move(*q_batch));
+      callback_(batch);
+      return quiver::Status::OK();
+    };
+    accumulator_ =
+        quiver::accum::Accumulator::FixedMemory(&schema_, rows_per_batch, q_callback);
+  }
+
+  void Insert(const pybind11::handle& batch) {
+    std::vector<std::unique_ptr<quiver::ReadOnlyBatch>> q_batches;
+    ThrowNotOk(BatchesFromPyarrow(batch, &schema_, &q_batches));
+    for (const auto& q_batch : q_batches) {
+      ThrowNotOk(accumulator_->InsertBatch(q_batch.get()));
+    }
+  }
+
+  void Finish() { ThrowNotOk(accumulator_->Finish()); }
+
+ private:
+  quiver::SimpleSchema schema_;
+  std::unique_ptr<quiver::accum::Accumulator> accumulator_;
+  pybind11::function callback_;
+};
+
 PYBIND11_MODULE(pyquiver, mod) {
+  // Clang format will mess up the formatting of the docstrings and so we disable it
+  // clang-format off
   mod.doc() = "A set of unique collections for Arrow data";
   pybind11::class_<HashMap>(mod, "HashMap")
-      .def(pybind11::init<const pybind11::handle&, const pybind11::handle&>())
+      .def(pybind11::init<const pybind11::handle&, const pybind11::handle&>(), R"(
+        Creates a HashMap with the given key and payload schema.  TODO: document further
+      )", pybind11::arg("key_schema"), pybind11::arg("payload_schema"))
       .def("insert", &HashMap::Insert, R"(
         Inserts a batch of data into the hashmap.
 
@@ -183,12 +219,10 @@ PYBIND11_MODULE(pyquiver, mod) {
         batch : pyarrow.RecordBatch
             The batch to insert.  The schema should be the combined key + payload
             schema.  Each row will be inserted into the map.
-      )",
-           pybind11::arg("key_value_batch"))
+      )", pybind11::arg("key_value_batch"))
       .def("lookup", &HashMap::Lookup, R"(
         Given a batch of keys, returns the payloads that correspond to those keys.
-      )",
-           pybind11::arg("keys_batch"))
+      )", pybind11::arg("keys_batch"))
       .def("inner_join", &HashMap::InnerJoin, R"(
         Performs an inner_join on a batch of data.
 
@@ -204,7 +238,23 @@ PYBIND11_MODULE(pyquiver, mod) {
         Since a single input row could generate potentially billions of output rows
         we cannot return a simple batch.  Instead we call a callback function for
         each batch of size `rows_per_batch` that is generated.
-      )",
-           pybind11::arg("batch"), pybind11::arg("callback"),
-           pybind11::arg("rows_per_batch") = 1_MiLL);
+      )", pybind11::arg("batch"), pybind11::arg("callback"),
+          pybind11::arg("rows_per_batch") = 1_MiLL);
+  pybind11::class_<Accumulator>(mod, "Accumulator")
+      .def(pybind11::init<const pybind11::handle&, int32_t, pybind11::function>(), R"(
+            Creates an accumulator which will accumulate data into(typically larger)
+            batches of a given size.This is faster than collecting all the batches
+            in memory and concatenating them and can be used to accumulate small
+            groups of rows into a larger batch.
+      )", pybind11::arg("schema"), pybind11::arg("rows_per_batch"),
+          pybind11::arg("callback"))
+      .def("insert", &Accumulator::Insert, R"(
+            Inserts a batch of data into the accumulator.  If enough rows have accumulated
+            then this will trigger a call to the callback.
+           )", pybind11::arg("batch"))
+      .def("finish", &Accumulator::Finish, R"(
+            Finishes the accumulation and triggers a call to the callback with the
+            final (short) batch.
+           )");
+  // clang-format on
 }
