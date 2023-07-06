@@ -76,7 +76,15 @@ class DataGeneratorImpl : public DataGenerator {
   }
 
   GeneratedData NRows(int64_t num_rows) override {
+    GeneratedMutableData mutable_data = NMutableRows(num_rows);
     GeneratedData out;
+    out.batch = std::move(mutable_data.batch);
+    out.schema = std::move(mutable_data.schema);
+    return out;
+  }
+
+  GeneratedMutableData NMutableRows(int64_t num_rows) override {
+    GeneratedMutableData out;
     std::unique_ptr<SchemaBuilder> schema_builder = SchemaBuilder::Start();
     for (auto* field_builder : field_builders_) {
       schema_builder->Field(field_builder->CreateBuilder());
@@ -90,6 +98,16 @@ class DataGeneratorImpl : public DataGenerator {
     }
     out.batch = std::move(batch);
     return out;
+  }
+
+  SimpleSchema Schema() override {
+    SimpleSchema schema;
+    std::unique_ptr<SchemaBuilder> schema_builder = SchemaBuilder::Start();
+    for (auto* field_builder : field_builders_) {
+      schema_builder->Field(field_builder->CreateBuilder());
+    }
+    QUIVER_DCHECK_OK(schema_builder->Finish(&schema));
+    return schema;
   }
 
   std::vector<std::unique_ptr<FieldGenerator>> owned_field_builders_;

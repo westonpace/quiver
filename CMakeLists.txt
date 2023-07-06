@@ -13,13 +13,8 @@ set(QUIVER_VERSION_PATCH "${quiver_VERSION_PATCH}")
 
 option(QUIVER_BUILD_TESTS "Build tests" OFF)
 option(QUIVER_BUILD_BENCHMARKS "Build benchmarks" OFF)
-option(QUIVER_BUNDLE "Create bundled quiver.h and quiver.c" OFF)
-option(QUIVER_BUILD_ID "A string identifying this build" OFF)
 option(QUIVER_PYTHON_BINDINGS "Build python bindings" OFF)
-
-if (NOT QUIVER_BUILD_ID)
-    string(RANDOM LENGTH 10 QUIVER_BUILD_ID)
-endif()
+option(QUIVER_INSTALL_CXX "Install C++ library" ON)
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake-modules)
 include(ClangTools)
@@ -58,6 +53,7 @@ add_library(
     quiver
     STATIC
     src/quiver/lib.cc
+    src/quiver/accumulator/accumulator.cc
     src/quiver/core/array.cc
     src/quiver/core/builder.cc
     src/quiver/core/io.cc
@@ -69,6 +65,7 @@ add_library(
     src/quiver/row/row_p.cc
     src/quiver/store/mmap_store.cc
     src/quiver/util/arrow_util.cc
+    src/quiver/util/bitmap_ops.cc
     src/quiver/util/cpu_info.cc
     src/quiver/util/local_allocator_p.cc
     src/quiver/util/logging_p.cc
@@ -81,7 +78,7 @@ add_library(
 set_target_properties(quiver PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(quiver PROPERTIES VERSION ${QUIVER_VERSION})
 set_target_properties(quiver PROPERTIES SOVERSION ${QUIVER_VERSION_MAJOR})
-set_target_properties(quiver PROPERTIES PUBLIC_HEADER quiver/include/lib.h)
+set_target_properties(quiver PROPERTIES PUBLIC_HEADER src/quiver/lib.h)
 
 target_precompile_headers(quiver PRIVATE src/quiver/pch.h)
 
@@ -112,19 +109,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     if(QUIVER_CODE_COVERAGE)
         append_coverage_compiler_flags_to_target(quiver)
     endif()
-# else()
-#     if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-#     target_compile_options(
-#         quiver
-#         PRIVATE
-#         -march=native)
-#     elseif(CMAKE_C_COMPILER_ID STREQUAL "AppleClang" OR
-#     CMAKE_C_COMPILER_ID STREQUAL "Clang")
-#     target_compile_options(
-#         quiver
-#         PRIVATE
-#         -march=native)
-#     endif()
 endif()
 
 if(QUIVER_PYTHON_BINDINGS)
@@ -132,6 +116,10 @@ if(QUIVER_PYTHON_BINDINGS)
 endif()
 
 if(QUIVER_BUILD_TESTS)
+    add_executable(
+        accumulator_test
+        src/quiver/accumulator/accumulator_test.cc
+        src/quiver/testutil/test_util.cc)
     add_executable(
         core_test
         src/quiver/core/array_test.cc
@@ -163,18 +151,21 @@ if(QUIVER_BUILD_TESTS)
     add_executable(
         utility_test
         src/quiver/util/arrow_util_test.cc
+        src/quiver/util/bit_util_test.cc
         src/quiver/util/cpu_info_test.cc
         src/quiver/util/memory_test.cc)
     
-    target_link_libraries(core_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
-    target_link_libraries(hash_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
-    target_link_libraries(hashtable_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
-    target_link_libraries(map_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
-    target_link_libraries(row_test PRIVATE quiver Arrow::arrow_shared GTest::gtest_main)
-    target_link_libraries(store_test PRIVATE quiver GTest::gtest_main)
-    target_link_libraries(utility_test PRIVATE quiver GTest::gtest_main)
+    target_link_libraries(accumulator_test PRIVATE quiver Arrow::arrow_shared GTest::gmock GTest::gtest_main)
+    target_link_libraries(core_test PRIVATE quiver Arrow::arrow_shared GTest::gmock GTest::gtest_main)
+    target_link_libraries(hash_test PRIVATE quiver Arrow::arrow_shared GTest::gmock GTest::gtest_main)
+    target_link_libraries(hashtable_test PRIVATE quiver Arrow::arrow_shared GTest::gmock GTest::gtest_main)
+    target_link_libraries(map_test PRIVATE quiver Arrow::arrow_shared GTest::gmock GTest::gtest_main)
+    target_link_libraries(row_test PRIVATE quiver Arrow::arrow_shared GTest::gmock GTest::gtest_main)
+    target_link_libraries(store_test PRIVATE quiver GTest::gmock GTest::gtest_main)
+    target_link_libraries(utility_test PRIVATE quiver GTest::gmock GTest::gtest_main)
 
     include(GoogleTest)
+    gtest_discover_tests(accumulator_test)
     gtest_discover_tests(core_test)
     gtest_discover_tests(hash_test)
     gtest_discover_tests(hashtable_test)
@@ -212,6 +203,9 @@ if(QUIVER_CODE_COVERAGE)
     )
 endif()
 
-install(TARGETS quiver DESTINATION lib)
-install(DIRECTORY src/ DESTINATION include FILES_MATCHING PATTERN "*.h")
-install(FILES ${CMAKE_CURRENT_BINARY_DIR}/generated/build_id.h DESTINATION include/quiver)
+if (QUIVER_INSTALL_CPP)
+    install(TARGETS quiver
+            LIBRARY DESTINATION lib
+            ARCHIVE DESTINATION lib/static
+            PUBLIC_HEADER DESTINATION include/quiver)
+endif()

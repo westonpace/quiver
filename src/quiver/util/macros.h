@@ -5,6 +5,7 @@
 #define QUIVER_EXPAND(x) x
 #define QUIVER_STRINGIFY(x) #x
 #define QUIVER_CONCAT(x, y) x##y
+#define QUIVER_LITTLE_ENDIAN 1
 
 #if defined(__GNUC__)
 #define QUIVER_UNLIKELY(x) (__builtin_expect(!!(x), 0))

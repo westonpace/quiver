@@ -1,5 +1,6 @@
 #pragma once
 
+#include "quiver/core/array.h"
 #include "quiver/core/builder.h"
 #include "quiver/pch.h"
 
@@ -8,6 +9,11 @@ namespace quiver::datagen {
 struct GeneratedData {
   SimpleSchema schema;
   std::unique_ptr<ReadOnlyBatch> batch;
+};
+
+struct GeneratedMutableData {
+  SimpleSchema schema;
+  std::unique_ptr<Batch> batch;
 };
 
 class FieldGenerator {
@@ -29,6 +35,8 @@ class DataGenerator {
   virtual DataGenerator* FlatFieldsWithNBytesTotalWidth(
       int n, int min_data_width_bytes, int max_data_width_bytes = -1) = 0;
   virtual GeneratedData NRows(int64_t num_rows) = 0;
+  virtual GeneratedMutableData NMutableRows(int64_t num_rows) = 0;
+  virtual SimpleSchema Schema() = 0;
 };
 std::unique_ptr<DataGenerator> Gen();
 

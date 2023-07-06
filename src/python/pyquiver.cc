@@ -1,6 +1,7 @@
 #include <pybind11/pybind11.h>
 
 #include <memory>
+#include <numeric>
 
 #include "quiver/core/array.h"
 #include "quiver/core/io.h"
@@ -8,28 +9,10 @@
 #include "quiver/hashtable/hashtable.h"
 #include "quiver/map/hashmap.h"
 #include "quiver/util/arrow_util.h"
+#include "quiver/util/literals.h"
+#include "quiver/util/status.h"
 
-// std::shared_ptr<arrow::Array> from_pyarrow(const pybind11::handle& array) {
-//   if (!pybind11::hasattr(array, "_export_to_c")) {
-//     throw pybind11::type_error("Expected pyarrow.Array");
-//   }
-
-//   ArrowArray c_data_array;
-//   ArrowSchema c_data_schema;
-
-//   intptr_t c_data_array_ptr = reinterpret_cast<intptr_t>(&c_data_array);
-//   intptr_t c_data_schema_ptr = reinterpret_cast<intptr_t>(&c_data_schema);
-
-//   auto export_fn = array.attr("_export_to_c");
-//   export_fn(c_data_array_ptr, c_data_schema_ptr);
-
-//   arrow::Result<std::shared_ptr<arrow::Array>> maybe_arr =
-//       arrow::ImportArray(&c_data_array, &c_data_schema);
-
-//   throw_not_ok(maybe_arr.status());
-
-//   return maybe_arr.MoveValueUnsafe();
-// }
+using namespace quiver::util::literals;
 
 void ThrowNotOk(const quiver::Status& status) {
   if (!status.ok()) {
@@ -69,6 +52,29 @@ quiver::Status BatchFromPyarrow(const pybind11::handle& pyarrow_batch,
   return quiver::ImportBatch(c_data_array.get(), schema, out);
 }
 
+quiver::Status BatchesFromPyarrow(
+    const pybind11::handle& pyarrow_thing, const quiver::SimpleSchema* schema,
+    std::vector<std::unique_ptr<quiver::ReadOnlyBatch>>* out) {
+  if (pybind11::hasattr(pyarrow_thing, "to_batches")) {
+    auto to_batches_fn = pyarrow_thing.attr("to_batches");
+    auto batches = to_batches_fn();
+
+    for (auto batch : batches) {
+      std::unique_ptr<quiver::ReadOnlyBatch> q_batch;
+      ThrowNotOk(BatchFromPyarrow(batch, schema, &q_batch));
+      out->push_back(std::move(q_batch));
+    }
+    return quiver::Status::OK();
+  } else if (pybind11::hasattr(pyarrow_thing, "_export_to_c")) {
+    std::unique_ptr<quiver::ReadOnlyBatch> q_batch;
+    ThrowNotOk(BatchFromPyarrow(pyarrow_thing, schema, &q_batch));
+    out->push_back(std::move(q_batch));
+    return quiver::Status::OK();
+  } else {
+    throw pybind11::type_error("Expected pyarrow.Table or pyarrow.RecordBatch");
+  }
+}
+
 pybind11::object BatchToPyarrow(quiver::ReadOnlyBatch&& batch) {
   quiver::util::OwnedArrowArray c_data_array = quiver::util::AllocateArrowArray();
   quiver::util::OwnedArrowSchema c_data_schema = quiver::util::AllocateArrowSchema();
@@ -86,34 +92,21 @@ pybind11::object BatchToPyarrow(quiver::ReadOnlyBatch&& batch) {
   return import_fn(c_data_array_ptr, c_data_schema_ptr);
 }
 
-// pybind11::object to_pyarrow(const arrow::Array& array) {
-//   ArrowArray c_data_array;
-//   ArrowSchema c_data_schema;
-
-//   throw_not_ok(arrow::ExportArray(array, &c_data_array, &c_data_schema));
-
-//   pybind11::module pyarrow = pybind11::module::import("pyarrow");
-//   pybind11::object pa_array_cls = pyarrow.attr("Array");
-//   auto import_fn = pa_array_cls.attr("_import_from_c");
-
-//   intptr_t c_data_array_ptr = reinterpret_cast<intptr_t>(&c_data_array);
-//   intptr_t c_data_schema_ptr = reinterpret_cast<intptr_t>(&c_data_schema);
-
-//   return import_fn(c_data_array_ptr, c_data_schema_ptr);
-// }
-
 class HashMap {
  public:
   HashMap(const pybind11::handle& key_schema, const pybind11::handle& payload_schema) {
     ThrowNotOk(SchemaFromPyarrow(key_schema, &key_schema_));
     ThrowNotOk(SchemaFromPyarrow(payload_schema, &payload_schema_));
     combined_schema_ = quiver::SimpleSchema::AllColumnsFrom(key_schema_, payload_schema_);
+    key_indices_.resize(key_schema_.num_fields());
+    std::iota(key_indices_.begin(), key_indices_.end(), 0);
+    payload_indices_.resize(payload_schema_.num_fields());
+    std::iota(payload_indices_.begin(), payload_indices_.end(), key_schema_.num_fields());
     scratch_.resize(1024 * 1024);
     std::span<uint8_t> scratch_span{scratch_.data(), scratch_.size()};
     sink_ = std::make_unique<quiver::StreamSink>(
         quiver::StreamSink::FromFixedSizeSpan(scratch_span));
-    source_ = std::make_unique<quiver::RandomAccessSource>(
-        quiver::RandomAccessSource::WrapSpan(scratch_span));
+    source_ = quiver::RandomAccessSource::FromSpan(scratch_span);
     std::unique_ptr<quiver::hash::Hasher> hasher =
         quiver::hash::Hasher::CreateIdentityHasher();
     std::unique_ptr<quiver::hashtable::HashTable> hashtable =
@@ -123,12 +116,12 @@ class HashMap {
                                             std::move(hashtable), &hashmap_));
   }
 
-  void Insert(const pybind11::handle& key_batch, const pybind11::handle& payload_batch) {
-    std::unique_ptr<quiver::ReadOnlyBatch> q_key_batch;
-    ThrowNotOk(BatchFromPyarrow(key_batch, &key_schema_, &q_key_batch));
-    std::unique_ptr<quiver::ReadOnlyBatch> q_payload_batch;
-    ThrowNotOk(BatchFromPyarrow(payload_batch, &payload_schema_, &q_payload_batch));
-    ThrowNotOk(hashmap_->Insert(q_key_batch.get(), q_payload_batch.get()));
+  void Insert(const pybind11::handle& batch) {
+    std::vector<std::unique_ptr<quiver::ReadOnlyBatch>> q_batches;
+    ThrowNotOk(BatchesFromPyarrow(batch, &combined_schema_, &q_batches));
+    for (const auto& q_batch : q_batches) {
+      ThrowNotOk(hashmap_->InsertCombinedBatch(q_batch.get()));
+    }
   }
 
   pybind11::object Lookup(const pybind11::handle& probe_keys_batch) {
@@ -140,24 +133,78 @@ class HashMap {
     return BatchToPyarrow(std::move(*q_result_batch));
   }
 
+  void InnerJoin(const pybind11::handle& batch, const pybind11::function& consume,
+                 int32_t rows_per_batch) {
+    std::vector<std::unique_ptr<quiver::ReadOnlyBatch>> q_batches;
+    ThrowNotOk(BatchesFromPyarrow(batch, &combined_schema_, &q_batches));
+
+    if (q_batches.size() != 1) {
+      ThrowNotOk(quiver::Status::NotImplemented("Expected exactly one batch"));
+    }
+
+    const std::unique_ptr<quiver::ReadOnlyBatch>& q_batch = q_batches[0];
+    std::unique_ptr<quiver::ReadOnlyBatch> q_key_batch =
+        q_batch->SelectView(key_indices_, &key_schema_);
+    std::unique_ptr<quiver::ReadOnlyBatch> q_payload_batch =
+        q_batch->SelectView(payload_indices_, &payload_schema_);
+    std::unique_ptr<quiver::Batch> q_result_batch =
+        quiver::Batch::CreateBasic(&combined_schema_);
+    auto callback = [&](std::unique_ptr<quiver::ReadOnlyBatch> q_result_batch) {
+      pybind11::object result_batch = BatchToPyarrow(std::move(*q_result_batch));
+      consume(result_batch);
+      return quiver::Status::OK();
+    };
+    ThrowNotOk(
+        hashmap_->InnerJoin(q_key_batch.get(), q_payload_batch.get(), 1_MiLL, callback));
+  }
+
  private:
   quiver::SimpleSchema key_schema_;
   quiver::SimpleSchema payload_schema_;
   quiver::SimpleSchema combined_schema_;
   std::vector<uint8_t> scratch_;
+  std::vector<int32_t> key_indices_;
+  std::vector<int32_t> payload_indices_;
   std::unique_ptr<quiver::StreamSink> sink_;
   std::unique_ptr<quiver::RandomAccessSource> source_;
   std::unique_ptr<quiver::map::HashMap> hashmap_;
 };
 
-int run_udf(int lhs, int rhs) { return lhs + rhs; }
-
 PYBIND11_MODULE(pyquiver, mod) {
-  mod.doc() = "An example module";
-  mod.def("run_udf", &run_udf,
-          "A function that does some transformation of a pyarrow array");
+  mod.doc() = "A set of unique collections for Arrow data";
   pybind11::class_<HashMap>(mod, "HashMap")
       .def(pybind11::init<const pybind11::handle&, const pybind11::handle&>())
-      .def("insert", &HashMap::Insert)
-      .def("lookup", &HashMap::Lookup);
+      .def("insert", &HashMap::Insert, R"(
+        Inserts a batch of data into the hashmap.
+
+        Parameters
+        ----------
+
+        batch : pyarrow.RecordBatch
+            The batch to insert.  The schema should be the combined key + payload
+            schema.  Each row will be inserted into the map.
+      )",
+           pybind11::arg("key_value_batch"))
+      .def("lookup", &HashMap::Lookup, R"(
+        Given a batch of keys, returns the payloads that correspond to those keys.
+      )",
+           pybind11::arg("keys_batch"))
+      .def("inner_join", &HashMap::InnerJoin, R"(
+        Performs an inner_join on a batch of data.
+
+        Each row of data will be searched in the map.  For each matching row stored
+        in the map an output row will be generated that contains:
+
+        Keys | Input Payload | Matching Row Payload
+
+        There may be multiple matches and so there may be multiple output rows for
+        each input row.  There may also be no matches and so there may be no output
+        rows for a given input row.
+
+        Since a single input row could generate potentially billions of output rows
+        we cannot return a simple batch.  Instead we call a callback function for
+        each batch of size `rows_per_batch` that is generated.
+      )",
+           pybind11::arg("batch"), pybind11::arg("callback"),
+           pybind11::arg("rows_per_batch") = 1_MiLL);
 }

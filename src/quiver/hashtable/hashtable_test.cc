@@ -33,24 +33,19 @@ TEST(StlHashTable, Basic) {
         LocalSpan<int64_t>(&local_alloc, {17, 5});
     util::local_ptr<std::span<int64_t>> row_ids_out =
         local_alloc.AllocateSpan<int64_t>(3);
+    util::local_ptr<std::span<int32_t>> hash_idx_out =
+        local_alloc.AllocateSpan<int32_t>(3);
     int64_t hash_idx_offset = 0;
     int64_t bucket_idx_offset = 0;
     int64_t length = 0;
 
-    ASSERT_TRUE(hashtable->Decode(*probe_hashes, *row_ids_out, &length, &hash_idx_offset,
-                                  &bucket_idx_offset));
+    ASSERT_TRUE(hashtable->Decode(*probe_hashes, *hash_idx_out, *row_ids_out, &length,
+                                  &hash_idx_offset, &bucket_idx_offset));
 
     // std::multimap is not stable when there are multiple matches for the same key
-    util::local_ptr<std::span<int64_t>> possibility_one =
-        LocalSpan<int64_t>(&local_alloc, {2, 3, 1});
-    util::local_ptr<std::span<int64_t>> possibility_two =
-        LocalSpan<int64_t>(&local_alloc, {3, 2, 1});
+    ASSERT_THAT(*row_ids_out, testing::UnorderedElementsAre(2, 3, 1));
+    ASSERT_THAT(*hash_idx_out, testing::ElementsAre(0, 0, 1));
 
-    bool equals_one = std::equal(row_ids_out->begin(), row_ids_out->end(),
-                                 possibility_one->begin(), possibility_one->end());
-    bool equals_two = std::equal(row_ids_out->begin(), row_ids_out->end(),
-                                 possibility_two->begin(), possibility_two->end());
-    ASSERT_TRUE(equals_one | equals_two);
     ASSERT_EQ(length, 3);
   }
 
@@ -60,12 +55,14 @@ TEST(StlHashTable, Basic) {
         LocalSpan<int64_t>(&local_alloc, {100, 1000});
     util::local_ptr<std::span<int64_t>> row_ids_out =
         local_alloc.AllocateSpan<int64_t>(1);
+    util::local_ptr<std::span<int32_t>> hash_idx_out =
+        local_alloc.AllocateSpan<int32_t>(1);
     int64_t hash_idx_offset = 0;
     int64_t bucket_idx_offset = 0;
     int64_t length = 0;
 
-    ASSERT_TRUE(hashtable->Decode(*probe_hashes, *row_ids_out, &length, &hash_idx_offset,
-                                  &bucket_idx_offset));
+    ASSERT_TRUE(hashtable->Decode(*probe_hashes, *hash_idx_out, *row_ids_out, &length,
+                                  &hash_idx_offset, &bucket_idx_offset));
 
     ASSERT_EQ(length, 0);
   }
@@ -76,28 +73,33 @@ TEST(StlHashTable, Basic) {
         LocalSpan<int64_t>(&local_alloc, {17, 5});
     util::local_ptr<std::span<int64_t>> row_ids_out =
         local_alloc.AllocateSpan<int64_t>(1);
+    util::local_ptr<std::span<int32_t>> hash_idx_out =
+        local_alloc.AllocateSpan<int32_t>(1);
     int64_t hash_idx_offset = 0;
     int64_t bucket_idx_offset = 0;
     int64_t length = 0;
 
-    ASSERT_FALSE(hashtable->Decode(*probe_hashes, *row_ids_out, &length, &hash_idx_offset,
-                                   &bucket_idx_offset));
+    ASSERT_FALSE(hashtable->Decode(*probe_hashes, *hash_idx_out, *row_ids_out, &length,
+                                   &hash_idx_offset, &bucket_idx_offset));
     ASSERT_EQ(1, length);
     ASSERT_THAT(*row_ids_out->data(), ::testing::AnyOf(2, 3));
+    ASSERT_EQ(*hash_idx_out->data(), 0);
     ASSERT_EQ(0, hash_idx_offset);
     ASSERT_EQ(1, bucket_idx_offset);
 
-    ASSERT_FALSE(hashtable->Decode(*probe_hashes, *row_ids_out, &length, &hash_idx_offset,
-                                   &bucket_idx_offset));
+    ASSERT_FALSE(hashtable->Decode(*probe_hashes, *hash_idx_out, *row_ids_out, &length,
+                                   &hash_idx_offset, &bucket_idx_offset));
     ASSERT_EQ(1, length);
     ASSERT_THAT(*row_ids_out->data(), ::testing::AnyOf(2, 3));
+    ASSERT_EQ(*hash_idx_out->data(), 0);
     ASSERT_EQ(1, hash_idx_offset);
     ASSERT_EQ(0, bucket_idx_offset);
 
-    ASSERT_TRUE(hashtable->Decode(*probe_hashes, *row_ids_out, &length, &hash_idx_offset,
-                                  &bucket_idx_offset));
+    ASSERT_TRUE(hashtable->Decode(*probe_hashes, *hash_idx_out, *row_ids_out, &length,
+                                  &hash_idx_offset, &bucket_idx_offset));
     ASSERT_EQ(1, length);
     ASSERT_EQ(1, *row_ids_out->data());
+    ASSERT_EQ(*hash_idx_out->data(), 1);
   }
 }
 
@@ -133,6 +135,8 @@ TEST(StlHashTable, Random) {
   offset = 0;
   util::local_ptr<std::span<int64_t>> out_row_ids =
       local_alloc.AllocateSpan<int64_t>(kBatchSize);
+  util::local_ptr<std::span<int32_t>> out_hash_idx =
+      local_alloc.AllocateSpan<int32_t>(kBatchSize);
   std::vector<int64_t> decoded_row_ids;
   decoded_row_ids.reserve(kNumRows);
   while (offset < kNumRows) {
@@ -141,10 +145,18 @@ TEST(StlHashTable, Random) {
     int64_t bucket_idx_offset = 0;
     std::span<const int64_t> batch_probe_hashes{reversed_hashes->data() + offset,
                                                 kBatchSize};
-    while (!hashtable->Decode(batch_probe_hashes, *out_row_ids, &length, &hash_idx_offset,
-                              &bucket_idx_offset)) {
+    while (!hashtable->Decode(batch_probe_hashes, *out_hash_idx, *out_row_ids, &length,
+                              &hash_idx_offset, &bucket_idx_offset)) {
       for (int i = 0; i < length; i++) {
         decoded_row_ids.push_back(out_row_ids->data()[i]);
+      }
+      // Every hash should match at least one row (in which case out_hash_idx would be
+      // strictly monotonic) or mulitple rows (in which case there may be some duplicates)
+      auto last_hash_id = 0;
+      for (std::size_t i = 0; i < length; i++) {
+        ASSERT_THAT(out_hash_idx->data()[i],
+                    ::testing::AnyOf(last_hash_id, last_hash_id + 1));
+        last_hash_id = out_hash_idx->data()[i];
       }
     }
     offset += kBatchSize;

@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstring>
 #include <iosfwd>
+#include <iostream>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <string_view>
@@ -513,12 +515,79 @@ bool HasNulls(ReadOnlyArray arr) {
   }
 }
 
+int64_t NumBytes(ReadOnlyArray arr) {
+  switch (ArrayLayout(arr)) {
+    case LayoutKind::kFlat: {
+      ReadOnlyFlatArray flat_array = std::get<ReadOnlyFlatArray>(arr);
+      return static_cast<int64_t>(flat_array.values.size() + flat_array.validity.size());
+    }
+    default:
+      DCHECK(false) << "Not yet implemented";
+      return 0;
+  }
+}
+
+ReadOnlyArray Slice(ReadOnlyArray array, int64_t offset, int64_t length) {
+  DCHECK_EQ(offset % 8, 0) << "offset must be a multiple of 8";
+  switch (ArrayLayout(array)) {
+    case LayoutKind::kFlat: {
+      ReadOnlyFlatArray flat_array = std::get<ReadOnlyFlatArray>(array);
+      int64_t validity_byte_offset = offset / 8;
+      int64_t validity_num_bytes = bit_util::CeilDiv(length, 8LL);
+      std::span<const uint8_t> validity =
+          flat_array.validity.subspan(validity_byte_offset, validity_num_bytes);
+      int64_t values_byte_offset = offset * flat_array.width_bytes;
+      int64_t values_length = length * flat_array.width_bytes;
+      std::span<const uint8_t> values =
+          flat_array.values.subspan(values_byte_offset, values_length);
+      return ReadOnlyFlatArray{validity, values, flat_array.width_bytes, length};
+    }
+    default:
+      DCHECK(false) << "Not yet implemented";
+      return {};
+  }
+}
+
 }  // namespace array
 
 FieldDescriptor& FieldDescriptor::child(int index) const {
   DCHECK_GE(index, 0);
   int64_t type_index = this->index;
   return schema->types[type_index + index];
+}
+
+std::string FieldDescriptor::ToString() const {
+  switch (layout) {
+    case LayoutKind::kFlat:
+      return "flat<" + std::to_string(data_width_bytes) + ">";
+    default:
+      DCHECK(false) << "Not yet implemented";
+      return "";
+  }
+}
+
+SimpleSchema SimpleSchema::Select(const std::vector<int32_t>& field_indices) const {
+  std::vector<FieldDescriptor> new_types;
+  std::vector<FieldDescriptor> new_top_level_types;
+  new_top_level_types.reserve(field_indices.size());
+  std::vector<int32_t> new_top_level_indices;
+  new_top_level_indices.reserve(field_indices.size());
+  for (const auto& field_index : field_indices) {
+    int32_t start = top_level_indices[field_index];
+    int32_t end;
+    if (static_cast<int32_t>(top_level_types.size()) == field_index + 1) {
+      end = static_cast<int32_t>(top_level_types.size());
+    } else {
+      end = top_level_indices[field_index + 1];
+    }
+    new_top_level_indices.push_back(static_cast<int32_t>(new_types.size()));
+    for (int32_t type_idx = start; type_idx < end; type_idx++) {
+      new_types.push_back(types[type_idx]);
+    }
+    new_top_level_types.push_back(new_types[new_top_level_indices.back()]);
+  }
+  return {std::move(new_types), std::move(new_top_level_types),
+          std::move(new_top_level_indices)};
 }
 
 bool SimpleSchema::Equals(const SimpleSchema& other) const {
@@ -552,6 +621,19 @@ Status SimpleSchema::ImportFromArrow(ArrowSchema* schema, SimpleSchema* out,
   }
   DCHECK_EQ(static_cast<int32_t>(out->types.size()), total_num_fields);
   return Status::OK();
+}
+
+std::string SimpleSchema::ToString() const {
+  std::stringstream out;
+  out << "schema{";
+  for (int i = 0; i < num_fields(); i++) {
+    out << top_level_types[i].ToString();
+    if (i < num_fields() - 1) {
+      out << ", ";
+    }
+  }
+  out << "}";
+  return out.str();
 }
 
 struct ExportedSchemaData {
@@ -675,9 +757,9 @@ SimpleSchema SimpleSchema::AllColumnsFrom(const SimpleSchema& left,
   all_top_level_indices.insert(all_top_level_indices.end(),
                                left.top_level_indices.begin(),
                                left.top_level_indices.end());
-  all_top_level_indices.insert(all_top_level_indices.end(),
-                               right.top_level_indices.begin(),
-                               right.top_level_indices.end());
+  for (int32_t top_level_index : right.top_level_indices) {
+    all_top_level_indices.push_back(left.num_types() + top_level_index);
+  }
 
   return {std::move(all_types), std::move(all_top_level_types),
           std::move(all_top_level_indices)};
@@ -702,6 +784,42 @@ Status GetBufferOrEmptySpan(const ArrowArray& array, int index, int64_t length, 
   return Status::OK();
 }
 
+class ViewBatch : public ReadOnlyBatch {
+ public:
+  ViewBatch(const ReadOnlyBatch* target, std::vector<int32_t> column_indices,
+            const SimpleSchema* new_schema_)
+      : target_(target),
+        column_indices_(std::move(column_indices)),
+        new_schema_(new_schema_) {}
+
+  [[nodiscard]] ReadOnlyArray array(int32_t index) const override {
+    return target_->array(column_indices_[index]);
+  }
+
+  [[nodiscard]] const SimpleSchema* schema() const override { return new_schema_; }
+
+  [[nodiscard]] int64_t length() const override { return target_->length(); }
+
+  Status ExportToArrow([[maybe_unused]] ArrowArray* out) && override {
+    return Status::Invalid(
+        "You cannot export part of a batch to Arrow (quiver will not split ownership)");
+  }
+
+  // Override SelectView so we don't end up with a view into a view into a view...
+  [[nodiscard]] std::unique_ptr<ReadOnlyBatch> SelectView(
+      std::vector<int32_t> indices, const SimpleSchema* new_schema) const override {
+    for (auto& index : indices) {
+      index = column_indices_[index];
+    }
+    return std::make_unique<ViewBatch>(target_, std::move(indices), new_schema);
+  }
+
+ private:
+  const ReadOnlyBatch* target_;
+  const std::vector<int32_t> column_indices_;
+  const SimpleSchema* new_schema_;
+};
+
 class ImportedBatch : public ReadOnlyBatch {
  public:
   [[nodiscard]] ReadOnlyArray array(int32_t index) const override {
@@ -712,8 +830,6 @@ class ImportedBatch : public ReadOnlyBatch {
 
   [[nodiscard]] const SimpleSchema* schema() const override { return schema_; }
   [[nodiscard]] int64_t length() const override { return length_; }
-  [[nodiscard]] int64_t num_bytes() const override { return num_bytes_; }
-  [[nodiscard]] int32_t num_buffers() const override { return num_buffers_; }
 
   ImportedBatch() = default;
   ImportedBatch(const ImportedBatch&) = delete;
@@ -763,8 +879,6 @@ class ImportedBatch : public ReadOnlyBatch {
       QUIVER_RETURN_NOT_OK(GetBufferOrEmptySpan<const uint8_t>(array, /*index=*/0, length,
                                                                /*width=*/0, field.layout,
                                                                &validity));
-      num_bytes_ += static_cast<int32_t>(validity.size());
-      num_buffers_++;
     }
 
     switch (field.layout) {
@@ -774,8 +888,6 @@ class ImportedBatch : public ReadOnlyBatch {
             array, /*index=*/1, length, field.data_width_bytes, field.layout, &values));
         arrays_.emplace_back(
             ReadOnlyFlatArray{validity, values, field.data_width_bytes, length});
-        num_bytes_ += static_cast<int64_t>(values.size());
-        num_buffers_++;
         break;
       }
       case LayoutKind::kInt32ContiguousList: {
@@ -790,8 +902,6 @@ class ImportedBatch : public ReadOnlyBatch {
           }
           QUIVER_RETURN_NOT_OK(DoImportArray(*array.children[0], field.child(0)));
         }
-        num_bytes_ += static_cast<int64_t>(offsets.size_bytes());
-        num_buffers_++;
         break;
       }
       case LayoutKind::kInt64ContiguousList: {
@@ -802,8 +912,6 @@ class ImportedBatch : public ReadOnlyBatch {
             ReadOnlyInt64ContiguousListArray{validity, offsets, length + 1});
         // There is a child array here but the only variations of int64 list are binary
         // and we handle those specially below
-        num_bytes_ += static_cast<int64_t>(offsets.size_bytes());
-        num_buffers_++;
         break;
       }
       default:
@@ -823,8 +931,6 @@ class ImportedBatch : public ReadOnlyBatch {
       std::span<const uint8_t> str_validity;
       QUIVER_RETURN_NOT_OK(GetBufferOrEmptySpan<const uint8_t>(
           array, /*index=*/2, data_length, /*width=*/1, field.layout, &str_data));
-      num_bytes_ += static_cast<int64_t>(str_data.size_bytes());
-      num_buffers_ += 2;
       arrays_.emplace_back(ReadOnlyFlatArray{str_validity, str_data, 1, length});
     } else if (field.format == "Z" || field.format == "U") {
       ReadOnlyInt64ContiguousListArray list_arr;
@@ -834,8 +940,6 @@ class ImportedBatch : public ReadOnlyBatch {
       std::span<const uint8_t> str_validity;
       QUIVER_RETURN_NOT_OK(GetBufferOrEmptySpan<const uint8_t>(
           array, /*index=*/2, data_length, /*width=*/1, field.layout, &str_data));
-      num_bytes_ += static_cast<int64_t>(str_data.size_bytes());
-      num_buffers_ += 2;
       arrays_.emplace_back(ReadOnlyFlatArray{str_validity, str_data, 1, length});
     }
     return Status::OK();
@@ -845,8 +949,6 @@ class ImportedBatch : public ReadOnlyBatch {
   std::vector<ReadOnlyArray> arrays_;
   ArrowArray backing_array_ = ArrowArray::Default();
   int64_t length_ = 0;
-  int64_t num_bytes_ = 0;
-  int32_t num_buffers_ = 0;
 
   friend Status ImportBatch(ArrowArray* array, const SimpleSchema* schema,
                             std::unique_ptr<ReadOnlyBatch>* out);
@@ -862,8 +964,9 @@ Status ImportBatch(ArrowArray* array, const SimpleSchema* schema,
   array->release = nullptr;
 
   if (array->n_children != schema->num_fields()) {
-    return Status::Invalid("Imported array had ", array->n_children, " but expected ",
-                           schema->num_fields(), " according to the schema");
+    return Status::Invalid("Imported array had ", array->n_children,
+                           " children but expected ", schema->num_fields(),
+                           " according to the schema");
   }
   if (array->n_buffers != 1) {
     return Status::Invalid(
@@ -885,6 +988,7 @@ Status ImportBatch(ArrowArray* array, const SimpleSchema* schema,
 
 class BasicBatch : public Batch {
  public:
+  ~BasicBatch() override = default;
   explicit BasicBatch(const SimpleSchema* schema) : schema_(schema) {
     int num_buffers_needed = 0;
     for (const auto& type : schema->types) {
@@ -936,10 +1040,6 @@ class BasicBatch : public Batch {
 
   [[nodiscard]] const SimpleSchema* schema() const override { return schema_; }
   [[nodiscard]] int64_t length() const override { return length_; }
-  [[nodiscard]] int64_t num_bytes() const override { return num_bytes_; }
-  [[nodiscard]] int32_t num_buffers() const override {
-    return static_cast<int32_t>(buffers_.size());
-  }
 
   struct ExportedArrayData {
     std::vector<ArrowArray> children;
@@ -1038,14 +1138,34 @@ class BasicBatch : public Batch {
                          int64_t num_bytes) override {
     std::size_t buffer_offset = array_idx_to_buffers_[array_index];
     std::size_t buffer_idx = buffer_offset + buffer_index;
-    auto old_size = static_cast<int64_t>(buffers_[buffer_idx].size());
     buffers_[buffer_idx].resize(num_bytes);
-    num_bytes_ += num_bytes - old_size;
   }
 
   int64_t buffer_capacity(int32_t array_index, int32_t buffer_index) override {
     std::size_t buffer_offset = array_idx_to_buffers_[array_index];
     return static_cast<int64_t>(buffers_[buffer_offset + buffer_index].size());
+  }
+
+  Status Combine(Batch&& other, const SimpleSchema* combined_schema_) override {
+    auto&& other_cast = dynamic_cast<BasicBatch&&>(other);
+    if (length_ != other_cast.length_) {
+      return Status::Invalid("Cannot combine batches with different lengths");
+    }
+    std::size_t num_left_buffers = buffers_.size();
+    array_idx_to_buffers_.reserve(array_idx_to_buffers_.size() +
+                                  other_cast.array_idx_to_buffers_.size());
+    for (std::size_t idx : other_cast.array_idx_to_buffers_) {
+      array_idx_to_buffers_.push_back(num_left_buffers + idx);
+    }
+    buffers_.reserve(buffers_.size() + other_cast.buffers_.size());
+    buffers_.insert(buffers_.end(), std::make_move_iterator(other_cast.buffers_.begin()),
+                    std::make_move_iterator(other_cast.buffers_.end()));
+    schema_ = combined_schema_;
+    other_cast.schema_ = nullptr;
+    other_cast.length_ = 0;
+    other_cast.array_idx_to_buffers_.clear();
+    other_cast.buffers_.clear();
+    return Status::OK();
   }
 
  private:
@@ -1063,13 +1183,26 @@ class BasicBatch : public Batch {
 
   const SimpleSchema* schema_;
   int64_t length_ = 0;
-  int64_t num_bytes_ = 0;
   std::vector<std::size_t> array_idx_to_buffers_;
   std::vector<std::vector<uint8_t>> buffers_;
 };
 
+int64_t ReadOnlyBatch::NumBytes() const {
+  int64_t num_bytes = 0;
+  for (int array_idx = 0; array_idx < schema()->num_fields(); array_idx++) {
+    num_bytes += array::NumBytes(array(array_idx));
+  }
+  return num_bytes;
+}
+
+[[nodiscard]] std::unique_ptr<ReadOnlyBatch> ReadOnlyBatch::SelectView(
+    std::vector<int32_t> indices, const SimpleSchema* new_schema) const {
+  return std::make_unique<ViewBatch>(this, std::move(indices), new_schema);
+}
+
 std::string ReadOnlyBatch::ToString() const {
   std::stringstream sstr;
+  sstr << "batch with " << length() << " rows" << std::endl;
   for (int array_idx = 0; array_idx < schema()->num_fields(); array_idx++) {
     sstr << array_idx << ":" << std::endl;
     array::PrintArray(array(array_idx), schema()->top_level_types[array_idx],
@@ -1083,6 +1216,9 @@ std::string ReadOnlyBatch::ToString() const {
 }
 
 bool ReadOnlyBatch::BinaryEquals(const ReadOnlyBatch& other) const {
+  if (length() != other.length()) {
+    return false;
+  }
   for (int array_idx = 0; array_idx < schema()->num_fields(); array_idx++) {
     ReadOnlyArray this_arr = array(array_idx);
     ReadOnlyArray other_arr = other.array(array_idx);
@@ -1091,6 +1227,37 @@ bool ReadOnlyBatch::BinaryEquals(const ReadOnlyBatch& other) const {
     }
   }
   return true;
+}
+
+[[nodiscard]] ReadOnlyArray BatchView::array(int32_t index) const {
+  ReadOnlyArray base_array = target_->array(index);
+  return array::Slice(base_array, offset_, length_);
+}
+
+[[nodiscard]] const SimpleSchema* BatchView::schema() const { return target_->schema(); }
+
+Status BatchView::ExportToArrow(ArrowArray* /*out*/) && {
+  return Status::Invalid("Cannot convert a slice to Arrow (will not split ownership)");
+}
+
+BatchView::BatchView(const ReadOnlyBatch* target, int64_t offset, int64_t length)
+    : target_(target), offset_(offset), length_(length) {}
+
+BatchView BatchView::SliceBatch(const ReadOnlyBatch* batch, int64_t offset,
+                                int64_t length) {
+  DCHECK_EQ(offset % 8, 0) << "offset must be a multiple of 8";
+  int64_t remaining = batch->length() - offset;
+  int64_t actual_length = length;
+  if (remaining < 0) {
+    length = 0;
+  } else if (remaining < length) {
+    actual_length = remaining;
+  }
+  const auto* maybe_view = dynamic_cast<const BatchView*>(batch);
+  if (maybe_view == nullptr) {
+    return {batch, offset, actual_length};
+  }
+  return {maybe_view->target_, offset, actual_length};
 }
 
 void Batch::ResizeFixedParts(int32_t array_index, int64_t new_length) {
@@ -1114,8 +1281,11 @@ std::unique_ptr<Batch> Batch::CreateBasic(const SimpleSchema* schema) {
 std::unique_ptr<Batch> Batch::CreateInitializedBasic(const SimpleSchema* schema,
                                                      int64_t num_bytes) {
   auto batch = std::make_unique<BasicBatch>(schema);
-  int64_t bytes_per_buffer =
-      bit_util::FloorDiv(num_bytes, static_cast<int64_t>(batch->num_buffers()));
+  int64_t num_buffers = 0;
+  for (int i = 0; i < schema->num_types(); i++) {
+    num_buffers += layout::num_buffers(schema->types[i].layout);
+  }
+  int64_t bytes_per_buffer = bit_util::FloorDiv(num_bytes, num_buffers);
 
   for (int i = 0; i < schema->num_types(); i++) {
     for (int j = 0; j < layout::num_buffers(schema->types[i].layout); j++) {

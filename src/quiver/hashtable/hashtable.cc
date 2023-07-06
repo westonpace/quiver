@@ -31,14 +31,16 @@ class StlHashTable : public HashTable {
     }
   }
 
-  bool Decode(std::span<const int64_t> hashes, std::span<int64_t> row_ids_out,
-              int64_t* length_out, int64_t* hash_idx_offset,
-              int64_t* bucket_idx_offset) override {
+  bool Decode(std::span<const int64_t> hashes, std::span<int32_t> hash_idx_out,
+              std::span<int64_t> row_ids_out, int64_t* length_out,
+              int64_t* hash_idx_offset, int64_t* bucket_idx_offset) override {
     DCHECK(!row_ids_out.empty());
     DCHECK_NE(hash_idx_offset, nullptr);
     DCHECK_NE(bucket_idx_offset, nullptr);
+    DCHECK_EQ(hash_idx_out.size(), row_ids_out.size());
 
     auto hash_itr = hashes.begin() + *hash_idx_offset;
+    auto hash_idx_itr = hash_idx_out.begin();
     auto out_itr = row_ids_out.begin();
 
     bool first = true;
@@ -55,7 +57,9 @@ class StlHashTable : public HashTable {
       }
       while (bucket_itr != range.second && out_itr != row_ids_out.end()) {
         *out_itr = static_cast<int64_t>(bucket_itr->second);
+        *hash_idx_itr = static_cast<int32_t>(hash_itr - hashes.begin());
         out_itr++;
+        hash_idx_itr++;
         bucket_itr++;
         bucket_idx++;
       }
@@ -65,7 +69,7 @@ class StlHashTable : public HashTable {
       }
       if (out_itr == row_ids_out.end() && hash_itr != hashes.end()) {
         *length_out = out_itr - row_ids_out.begin();
-        *hash_idx_offset += hash_itr - hashes.begin();
+        *hash_idx_offset = hash_itr - hashes.begin();
         *bucket_idx_offset = bucket_idx;
         return false;
       }

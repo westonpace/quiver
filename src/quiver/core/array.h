@@ -60,6 +60,7 @@ struct FieldDescriptor {
   // Default shallow equality
   auto operator<=>(const FieldDescriptor&) const = default;
   [[nodiscard]] FieldDescriptor& child(int child_index) const;
+  [[nodiscard]] std::string ToString() const;
 };
 
 struct SimpleSchema {
@@ -75,6 +76,7 @@ struct SimpleSchema {
   [[nodiscard]] const FieldDescriptor& field(int field_idx) const {
     return types[top_level_indices[field_idx]];
   }
+  [[nodiscard]] SimpleSchema Select(const std::vector<int32_t>& field_indices) const;
 
   /// <summary>
   /// Converts from a C data schema to a quiver schema
@@ -92,6 +94,7 @@ struct SimpleSchema {
   static SimpleSchema AllColumnsFrom(const SimpleSchema& left, const SimpleSchema& right);
 
   Status ExportToArrow(ArrowSchema* out) const;
+  [[nodiscard]] std::string ToString() const;
 
   [[nodiscard]] bool Equals(const SimpleSchema& other) const;
 };
@@ -189,6 +192,7 @@ namespace array {
 
 Array EmptyArray(LayoutKind layout);
 ReadOnlyArray ArrayView(Array array);
+ReadOnlyArray Slice(ReadOnlyArray array, int64_t offset, int64_t length);
 LayoutKind ArrayLayout(Array array);
 LayoutKind ArrayLayout(ReadOnlyArray array);
 void PrintArray(ReadOnlyArray array, const FieldDescriptor& type, int indentation_level,
@@ -196,6 +200,7 @@ void PrintArray(ReadOnlyArray array, const FieldDescriptor& type, int indentatio
 std::string ToString(ReadOnlyArray array, const FieldDescriptor& type);
 bool BinaryEquals(ReadOnlyArray lhs, ReadOnlyArray rhs);
 bool HasNulls(ReadOnlyArray arr);
+int64_t NumBytes(ReadOnlyArray arr);
 
 }  // namespace array
 
@@ -259,11 +264,7 @@ class ReadOnlyBatch {
   /// <summary>
   /// The number of bytes occupied by the arrays
   /// </summary>
-  [[nodiscard]] virtual int64_t num_bytes() const = 0;
-  /// <summary>
-  /// The total number of buffers in the batch
-  /// </summary>
-  [[nodiscard]] virtual int32_t num_buffers() const = 0;
+  [[nodiscard]] int64_t NumBytes() const;
   /// <summary>
   /// Exports the batch to the C data interface.
   /// </summary>
@@ -273,8 +274,33 @@ class ReadOnlyBatch {
   /// in undefined behavior.
   virtual Status ExportToArrow(ArrowArray* out) && = 0;
 
+  /// <summary>
+  /// Returns a view into some columns of this batch.
+  /// </summary>
+  ///
+  /// The returned batch is a view only and should not outlive the source batch.
+  [[nodiscard]] virtual std::unique_ptr<ReadOnlyBatch> SelectView(
+      std::vector<int32_t> indices, const SimpleSchema* new_schema) const;
+
   [[nodiscard]] std::string ToString() const;
   [[nodiscard]] bool BinaryEquals(const ReadOnlyBatch& other) const;
+};
+
+class BatchView : public ReadOnlyBatch {
+ public:
+  static BatchView SliceBatch(const ReadOnlyBatch* batch, int64_t offset, int64_t length);
+
+  [[nodiscard]] ReadOnlyArray array(int32_t index) const override;
+  [[nodiscard]] const SimpleSchema* schema() const override;
+  [[nodiscard]] int64_t length() const override { return length_; };
+  Status ExportToArrow(ArrowArray* out) && override;
+
+ private:
+  BatchView(const ReadOnlyBatch* target, int64_t offset, int64_t length);
+
+  const ReadOnlyBatch* target_;
+  int64_t offset_;
+  int64_t length_;
 };
 
 /// <summary>
@@ -282,6 +308,7 @@ class ReadOnlyBatch {
 /// </summary>
 class MutableBatch : public ReadOnlyBatch {
  public:
+  ~MutableBatch() override = default;
   /// <summary>
   /// Access an array for modification, by index
   /// </summary>
@@ -293,11 +320,13 @@ class MutableBatch : public ReadOnlyBatch {
 /// </summary>
 class Batch : public MutableBatch {
  public:
+  ~Batch() override = default;
   /// <summary>
   /// Resizes a buffer in the batch.  In addition to allocating more memory this may
   /// require copying the bytes from the old buffer into the new buffer.  This also sets
   /// the bytes to zero
   /// </summary>
+  // TODO: THIS CAN FAIL
   virtual void ResizeBufferBytes(int32_t array_index, int32_t buffer_index,
                                  int64_t num_bytes) = 0;
   /// <summary>
@@ -313,6 +342,8 @@ class Batch : public MutableBatch {
                                                 int32_t buffer_index) = 0;
 
   void ResizeFixedParts(int32_t array_index, int64_t new_length);
+
+  virtual Status Combine(Batch&& other, const SimpleSchema* combined_schema_) = 0;
 
   /// <summary>
   /// Creates a basic instance of Batch

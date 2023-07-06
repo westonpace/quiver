@@ -45,13 +45,12 @@ void BM_HashRows(benchmark::State& state) {
   probe_hashes_vec.erase(last, probe_hashes_vec.end());
   std::shuffle(probe_hashes_vec.begin(), probe_hashes_vec.end(), Rng());
 
-  std::cout << "There are " << probe_hashes_vec.size() << " probe hashes and "
-            << hashes.size() << " build hashes" << std::endl;
-
   std::span<const int64_t> probe_hashes = probe_hashes_vec;
 
   std::vector<int64_t> out_row_ids_vec(kBatchSize);
   std::span<int64_t> out_row_ids = out_row_ids_vec;
+  std::vector<int32_t> out_hash_idx_vec(kBatchSize);
+  std::span<int32_t> out_hash_idx = out_hash_idx_vec;
 
   for (auto _iter : state) {
     std::unique_ptr<hashtable::HashTable> hashtable = hashtable::HashTable::MakeStl();
@@ -74,7 +73,7 @@ void BM_HashRows(benchmark::State& state) {
           std::min(static_cast<uint64_t>(kBatchSize), probe_hashes_vec.size() - offset);
       std::span<const int64_t> batch_probe_hashes{probe_hashes.data() + offset,
                                                   batch_size};
-      while (!hashtable->Decode(batch_probe_hashes, out_row_ids, &length,
+      while (!hashtable->Decode(batch_probe_hashes, out_hash_idx, out_row_ids, &length,
                                 &hash_idx_offset, &bucket_idx_offset)) {
         benchmark::DoNotOptimize(out_row_ids.data());
         row_ids_read += length;
@@ -82,8 +81,6 @@ void BM_HashRows(benchmark::State& state) {
       row_ids_read += length;
       offset += batch_size;
     }
-
-    std::cout << "Row ids read: " << row_ids_read << std::endl;
   }
   state.SetItemsProcessed(int64_t(state.iterations()) * kTotalSize);
 }

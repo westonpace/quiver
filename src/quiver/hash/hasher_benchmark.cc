@@ -32,7 +32,7 @@ void BM_HashRows(benchmark::State& state) {
     benchmark::DoNotOptimize(hash_out.data());
     benchmark::ClobberMemory();
   }
-  state.SetBytesProcessed(int64_t(state.iterations()) * int64_t(data.batch->num_bytes()));
+  state.SetBytesProcessed(int64_t(state.iterations()) * int64_t(data.batch->NumBytes()));
 }
 
 }  // namespace

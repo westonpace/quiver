@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
+#include <type_traits>
 
 #include "quiver/util/logging_p.h"
 
@@ -29,10 +31,30 @@ namespace quiver::bit_util {
 #define QUIVER_POPCOUNT32 __builtin_popcount
 #endif
 
-inline bool IsPwr2(int32_t val) { return QUIVER_POPCOUNT32(val) == 1; }
-inline bool IsPwr2(uint32_t val) { return QUIVER_POPCOUNT32(val) == 1; }
-inline bool IsPwr2(int64_t val) { return QUIVER_POPCOUNT64(val) == 1; }
-inline bool IsPwr2(uint64_t val) { return QUIVER_POPCOUNT64(val) == 1; }
+inline constexpr bool IsPwr2(int32_t val) {
+  if (std::is_constant_evaluated()) {
+    return val > 0 && (val & (val - 1)) == 0;
+  }
+  return QUIVER_POPCOUNT32(val) == 1;
+}
+inline constexpr bool IsPwr2(uint32_t val) {
+  if (std::is_constant_evaluated()) {
+    return val > 0 && (val & (val - 1)) == 0;
+  }
+  return QUIVER_POPCOUNT32(val) == 1;
+}
+inline constexpr bool IsPwr2(int64_t val) {
+  if (std::is_constant_evaluated()) {
+    return val > 0 && (val & (val - 1)) == 0;
+  }
+  return QUIVER_POPCOUNT64(val) == 1;
+}
+inline constexpr bool IsPwr2(uint64_t val) {
+  if (std::is_constant_evaluated()) {
+    return val > 0 && (val & (val - 1)) == 0;
+  }
+  return QUIVER_POPCOUNT64(val) == 1;
+}
 
 inline bool IsPwr2OrZero(int32_t val) { return QUIVER_POPCOUNT32(val) <= 1; }
 inline bool IsPwr2OrZero(uint32_t val) { return QUIVER_POPCOUNT32(val) <= 1; }
@@ -61,6 +83,117 @@ constexpr int32_t FloorDiv(int32_t value, int32_t divisor) { return value / divi
 static inline int32_t PaddingNeededPwr2(int32_t offset, int pwr_2) {
   QUIVER_DCHECK(IsPwr2(pwr_2));
   return (-offset) & (pwr_2 - 1);
+}
+
+// Return the number of bytes needed to fit the given number of bits
+constexpr int64_t BytesForBits(int64_t bits) {
+  // This formula avoids integer overflow on very large `bits`
+  return (bits >> 3) + static_cast<int64_t>((bits & 7) != 0);
+}
+
+// Returns a mask for the bit_index lower order bits.
+// Only valid for bit_index in the range [0, 64).
+constexpr uint64_t LeastSignificantBitMask(int64_t bit_index) {
+  return (static_cast<uint64_t>(1) << bit_index) - 1;
+}
+
+static constexpr bool GetBit(const uint8_t* bits, uint64_t idx) {
+  return ((bits[idx >> 3] >> (idx & 0x07)) & 1) != 0;
+}
+
+// Bitmask selecting the k-th bit in a byte
+static constexpr std::array<uint8_t, 8> kBitmask = {1, 2, 4, 8, 16, 32, 64, 128};
+
+static inline void SetBit(uint8_t* bits, int64_t idx) {
+  bits[idx / 8] |= kBitmask[idx % 8];
+}
+
+static inline void SetBitTo(uint8_t* bits, int64_t idx, bool bit_is_set) {
+  // https://graphics.stanford.edu/~seander/bithacks.html
+  // "Conditionally set or clear bits without branching"
+  // NOTE: this seems to confuse Valgrind as it reads from potentially
+  // uninitialized memory
+  bits[idx / 8] ^=
+      static_cast<uint8_t>(-static_cast<uint8_t>(bit_is_set) ^ bits[idx / 8]) &
+      kBitmask[idx % 8];
+}
+
+// Gets the i-th bit from a byte. Should only be used with i <= 7.
+static constexpr bool GetBitFromByte(uint8_t byte, uint8_t idx) {
+  return (byte & kBitmask[idx]) != 0;
+}
+
+// Returns 'value' rounded down to the nearest multiple of 'factor'
+constexpr int64_t RoundDown(int64_t value, int64_t factor) {
+  return (value / factor) * factor;
+}
+
+// Returns 'value' rounded up to the nearest multiple of 'factor' when factor
+// is a power of two.
+// The result is undefined on overflow, i.e. if `value > 2**64 - factor`,
+// since we cannot return the correct result which would be 2**64.
+constexpr int64_t RoundUpToPowerOf2(int64_t value, int64_t factor) {
+  return (value + (factor - 1)) & ~(factor - 1);
+}
+
+static inline int32_t PopCount(uint64_t bitmap) { return QUIVER_POPCOUNT64(bitmap); }
+static inline int32_t PopCount(uint32_t bitmap) { return QUIVER_POPCOUNT32(bitmap); }
+
+// Bitmask selecting the (k - 1) preceding bits in a byte
+static constexpr std::array<uint8_t, 8> kPrecedingBitmask = {0, 1, 3, 7, 15, 31, 63, 127};
+
+static inline int CountTrailingZeros(uint32_t value) {
+#if defined(__clang__) || defined(__GNUC__)
+  if (value == 0) {
+    return 32;
+  }
+  return static_cast<int>(__builtin_ctzl(value));
+#elif defined(_MSC_VER)
+  unsigned long index;  // NOLINT
+  if (_BitScanForward(&index, value)) {
+    return static_cast<int>(index);
+  } else {
+    return 32;
+  }
+#else
+  int bitpos = 0;
+  if (value) {
+    while (value & 1 == 0) {
+      value >>= 1;
+      ++bitpos;
+    }
+  } else {
+    bitpos = 32;
+  }
+  return bitpos;
+#endif
+}
+
+static inline int CountTrailingZeros(uint64_t value) {
+#if defined(__clang__) || defined(__GNUC__)
+  if (value == 0) {
+    return 64;
+  }
+  return static_cast<int>(__builtin_ctzll(value));
+#elif defined(_MSC_VER)
+  unsigned long index;  // NOLINT
+  if (_BitScanForward64(&index, value)) {
+    return static_cast<int>(index);
+  } else {
+    return 64;
+  }
+#else
+  int bitpos = 0;
+  if (value) {
+    while (value & 1 == 0) {
+      value >>= 1;
+      ++bitpos;
+    }
+  } else {
+    bitpos = 64;
+  }
+  return bitpos;
+#endif
 }
 
 }  // namespace quiver::bit_util

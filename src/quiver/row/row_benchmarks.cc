@@ -77,12 +77,12 @@ void BenchDecodeMemory(const datagen::GeneratedData& data, benchmark::State& sta
   int64_t num_rows = data.batch->length();
 
   {
-    local_alloc.AllocateSpan<uint8_t>(data.batch->num_bytes() * 2LL +
+    local_alloc.AllocateSpan<uint8_t>(data.batch->NumBytes() * 2LL +
                                       num_rows * static_cast<int64_t>(sizeof(int64_t)));
   }
 
   util::local_ptr<std::span<uint8_t>> scratch =
-      local_alloc.AllocateSpan<uint8_t>(data.batch->num_bytes() * 2);
+      local_alloc.AllocateSpan<uint8_t>(data.batch->NumBytes() * 2);
 
   StreamSink sink = StreamSink::FromFixedSizeSpan(*scratch);
   std::unique_ptr<row::RowEncoder> encoder;
@@ -104,7 +104,7 @@ void BenchDecodeMemory(const datagen::GeneratedData& data, benchmark::State& sta
   std::iota(indices->begin(), indices->end(), 0);
   util::Shuffle(*indices);
   std::unique_ptr<Batch> batch =
-      Batch::CreateInitializedBasic(&data.schema, data.batch->num_bytes());
+      Batch::CreateInitializedBasic(&data.schema, data.batch->NumBytes());
 
   for (auto _iter : state) {
     decoder->Load(*indices, batch.get()).AbortNotOk();
@@ -117,7 +117,7 @@ void BenchDecodeFile(const datagen::GeneratedData& data, benchmark::State& state
   int64_t num_rows = data.batch->length();
 
   {
-    local_alloc.AllocateSpan<uint8_t>(data.batch->num_bytes() * 2LL +
+    local_alloc.AllocateSpan<uint8_t>(data.batch->NumBytes() * 2LL +
                                       num_rows * static_cast<int64_t>(sizeof(int64_t)));
   }
 
@@ -144,7 +144,7 @@ void BenchDecodeFile(const datagen::GeneratedData& data, benchmark::State& state
   std::iota(indices->begin(), indices->end(), 0);
   util::Shuffle(*indices);
   std::unique_ptr<Batch> batch =
-      Batch::CreateInitializedBasic(&data.schema, data.batch->num_bytes());
+      Batch::CreateInitializedBasic(&data.schema, data.batch->NumBytes());
 
   for (auto _iter : state) {
     decoder->Load(*indices, batch.get()).AbortNotOk();
@@ -156,7 +156,7 @@ void BenchDecodeIoUring(const datagen::GeneratedData& data, benchmark::State& st
   int64_t num_rows = data.batch->length();
 
   {
-    local_alloc.AllocateSpan<uint8_t>(data.batch->num_bytes() * 2LL +
+    local_alloc.AllocateSpan<uint8_t>(data.batch->NumBytes() * 2LL +
                                       num_rows * static_cast<int64_t>(sizeof(int64_t)));
   }
 
@@ -181,7 +181,7 @@ void BenchDecodeIoUring(const datagen::GeneratedData& data, benchmark::State& st
   std::iota(indices->begin(), indices->end(), 0);
   util::Shuffle(*indices);
   std::unique_ptr<Batch> batch =
-      Batch::CreateInitializedBasic(&data.schema, data.batch->num_bytes());
+      Batch::CreateInitializedBasic(&data.schema, data.batch->NumBytes());
 
   for (auto _iter : state) {
     decoder->Load(*indices, batch.get()).AbortNotOk();

@@ -11,7 +11,8 @@ class Hasher {
   /// <summary>
   /// Compute hashes for the values in batch
   /// </summary>
-  /// Will store one output hash for each row in the batch
+  /// Will store one output hash for each row in the batch.  All columns will participate
+  /// in the hashing
   ///
   /// Expects that `out` has the same length as `batch` and has
   /// a width of hash_width_bytes().  It is the caller's responsibility
