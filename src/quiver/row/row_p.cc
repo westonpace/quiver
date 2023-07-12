@@ -273,10 +273,11 @@ class ContiguousListEncoder {
 
 class RowEncoderImpl : public RowEncoder {
  public:
-  RowEncoderImpl(RowSchema schema, StreamSink* sink)
-      : schema_(std::move(schema)), sink_(sink) {}
+  RowEncoderImpl(RowSchema schema, Storage* storage)
+      : schema_(std::move(schema)), storage_(storage) {}
 
   Status Initialize() {
+    QUIVER_RETURN_NOT_OK(storage_->OpenStreamSink(&sink_));
     for (std::size_t field_idx = 0; field_idx < schema_.schema->top_level_types.size();
          field_idx++) {
       const auto& field = schema_.schema->top_level_types[field_idx];
@@ -305,7 +306,7 @@ class RowEncoderImpl : public RowEncoder {
     for (int64_t row_idx = 0; row_idx < batch_length; row_idx++) {
       // Encode values
       for (auto& flat_encoder : flat_encoders) {
-        flat_encoder.EncodeValue(sink_);
+        flat_encoder.EncodeValue(sink_.get());
       }
       // Encode validity
       uint8_t bitmask = 1;
@@ -331,8 +332,9 @@ class RowEncoderImpl : public RowEncoder {
   void Finish() override { sink_->Finish(); }
 
  private:
-  RowSchema schema_;
-  StreamSink* sink_;
+  const RowSchema schema_;
+  Storage* storage_;
+  std::unique_ptr<StreamSink> sink_;
   int64_t row_id_counter_ = 0;
 
   std::vector<int32_t> flat_col_indices;
@@ -346,7 +348,7 @@ class RowEncoderImpl : public RowEncoder {
       clist_int64_encoders;
 };
 
-Status RowEncoder::Create(const SimpleSchema* schema, StreamSink* sink, bool direct_io,
+Status RowEncoder::Create(const SimpleSchema* schema, Storage* storage, bool direct_io,
                           std::unique_ptr<RowEncoder>* out) {
   int32_t row_alignment = sizeof(int64_t);
   if (direct_io) {
@@ -354,7 +356,7 @@ Status RowEncoder::Create(const SimpleSchema* schema, StreamSink* sink, bool dir
   }
   RowSchema row_schema(row_alignment, sizeof(int64_t));
   QUIVER_RETURN_NOT_OK(row_schema.Initialize(*schema));
-  auto impl = std::make_unique<RowEncoderImpl>(std::move(row_schema), sink);
+  auto impl = std::make_unique<RowEncoderImpl>(std::move(row_schema), storage);
   QUIVER_RETURN_NOT_OK(impl->Initialize());
   *out = std::move(impl);
   return Status::OK();
@@ -414,10 +416,11 @@ class FlatDecoder {
 
 class RowDecoderImpl : public RowDecoder {
  public:
-  RowDecoderImpl(RowSchema schema, RandomAccessSource* source)
-      : schema_(std::move(schema)), source_(source) {}
+  RowDecoderImpl(RowSchema schema, Storage* storage)
+      : schema_(std::move(schema)), storage_(storage) {}
 
   Status Initialize() {
+    QUIVER_RETURN_NOT_OK(storage_->OpenRandomAccessSource(&source_));
     for (std::size_t field_idx = 0; field_idx < schema_.schema->top_level_types.size();
          field_idx++) {
       const auto& field = schema_.schema->top_level_types[field_idx];
@@ -485,7 +488,8 @@ class RowDecoderImpl : public RowDecoder {
 
  private:
   RowSchema schema_;
-  RandomAccessSource* source_;
+  Storage* storage_;
+  std::unique_ptr<RandomAccessSource> source_;
 
   std::vector<FlatDecoder> flat_decoders_;
   std::vector<uint8_t> validity_scratch_;
@@ -493,10 +497,11 @@ class RowDecoderImpl : public RowDecoder {
 
 class StagedRowDecoderImpl : public RowDecoder {
  public:
-  StagedRowDecoderImpl(RowSchema schema, RandomAccessSource* source)
-      : schema_(std::move(schema)), source_(source) {}
+  StagedRowDecoderImpl(RowSchema schema, Storage* storage)
+      : schema_(std::move(schema)), storage_(storage) {}
 
   Status Initialize() {
+    QUIVER_RETURN_NOT_OK(storage_->OpenRandomAccessSource(&source_));
     for (std::size_t field_idx = 0; field_idx < schema_.schema->top_level_types.size();
          field_idx++) {
       const auto& field = schema_.schema->top_level_types[field_idx];
@@ -566,7 +571,8 @@ class StagedRowDecoderImpl : public RowDecoder {
 
  private:
   RowSchema schema_;
-  RandomAccessSource* source_;
+  Storage* storage_;
+  std::unique_ptr<RandomAccessSource> source_;
 
   std::vector<FlatDecoder> flat_decoders_;
   std::vector<uint8_t> validity_scratch_;
@@ -713,10 +719,8 @@ class IoUringDecoderImpl : public RowDecoder {
   constexpr static int64_t kMiniBatchSize = 32;
   constexpr static int64_t kIoUringDepth = kMiniBatchSize * 2;
 
-  IoUringDecoderImpl(RowSchema schema, int file_descriptor)
-      : file_descriptor_(file_descriptor),
-        schema_(std::move(schema)),
-        scratch_offsets_(kIoUringDepth) {
+  IoUringDecoderImpl(RowSchema schema, Storage* storage)
+      : storage_(storage), schema_(std::move(schema)), scratch_offsets_(kIoUringDepth) {
     scratch_space_.reserve(kIoUringDepth);
     for (int i = 0; i < kIoUringDepth; i++) {
       scratch_space_.push_back(util::AllocateAligned(schema.fixed_length, 512));
@@ -727,6 +731,8 @@ class IoUringDecoderImpl : public RowDecoder {
   }
 
   Status Initialize() {
+    QUIVER_RETURN_NOT_OK(storage_->OpenRandomAccessSource(&source_));
+    file_source_ = source_->AsFile();
     for (std::size_t field_idx = 0; field_idx < schema_.schema->top_level_types.size();
          field_idx++) {
       const auto& field = schema_.schema->top_level_types[field_idx];
@@ -824,13 +830,18 @@ class IoUringDecoderImpl : public RowDecoder {
   }
 
   Status Load(std::span<int64_t> indices, Batch* out) override {
-    IoUringSource src(file_descriptor_, kIoUringDepth);
+    DCHECK(file_source_.has_value()) << "Call to Load without Initialize";
+    IoUringSource src(
+        file_source_->file_descriptor(),  // NOLINT(bugprone-unchecked-optional-access)
+        kIoUringDepth);
     src.Init();
     return DoLoad(src, indices, out);
   }
 
  private:
-  int file_descriptor_;
+  Storage* storage_;
+  std::unique_ptr<RandomAccessSource> source_;
+  std::optional<FileSource> file_source_;
   RowSchema schema_;
 
   std::vector<FlatDecoder> flat_decoders_;
@@ -839,36 +850,35 @@ class IoUringDecoderImpl : public RowDecoder {
   std::vector<int32_t> scratch_offsets_;
 };
 
-Status RowDecoder::Create(const SimpleSchema* schema, RandomAccessSource* source,
+Status RowDecoder::Create(const SimpleSchema* schema, Storage* storage,
                           std::unique_ptr<RowDecoder>* out) {
   RowSchema row_schema(sizeof(int64_t), sizeof(int64_t));
   QUIVER_RETURN_NOT_OK(row_schema.Initialize(*schema));
-  auto impl = std::make_unique<RowDecoderImpl>(std::move(row_schema), source);
+  auto impl = std::make_unique<RowDecoderImpl>(std::move(row_schema), storage);
   QUIVER_RETURN_NOT_OK(impl->Initialize());
   *out = std::move(impl);
   return Status::OK();
 }
 
-Status RowDecoder::CreateStaged(const SimpleSchema* schema, RandomAccessSource* source,
+Status RowDecoder::CreateStaged(const SimpleSchema* schema, Storage* storage,
                                 std::unique_ptr<RowDecoder>* out) {
   RowSchema row_schema(sizeof(int64_t), sizeof(int64_t));
   QUIVER_RETURN_NOT_OK(row_schema.Initialize(*schema));
-  auto impl = std::make_unique<StagedRowDecoderImpl>(std::move(row_schema), source);
+  auto impl = std::make_unique<StagedRowDecoderImpl>(std::move(row_schema), storage);
   QUIVER_RETURN_NOT_OK(impl->Initialize());
   *out = std::move(impl);
   return Status::OK();
 }
 
-Status RowDecoder::CreateIoUring(const SimpleSchema* schema, int file_descriptor,
-                                 bool direct, std::unique_ptr<RowDecoder>* out) {
+Status RowDecoder::CreateIoUring(const SimpleSchema* schema, Storage* storage,
+                                 std::unique_ptr<RowDecoder>* out) {
   int32_t row_alignment = sizeof(int64_t);
-  if (direct) {
-    row_alignment = 512;
+  if (storage->requires_alignment()) {
+    row_alignment = storage->page_size();
   }
   RowSchema row_schema(row_alignment, sizeof(int64_t));
   QUIVER_RETURN_NOT_OK(row_schema.Initialize(*schema));
-  auto impl =
-      std::make_unique<IoUringDecoderImpl>(std::move(row_schema), file_descriptor);
+  auto impl = std::make_unique<IoUringDecoderImpl>(std::move(row_schema), storage);
   QUIVER_RETURN_NOT_OK(impl->Initialize());
   *out = std::move(impl);
   return Status::OK();

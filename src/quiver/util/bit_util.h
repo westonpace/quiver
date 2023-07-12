@@ -118,9 +118,23 @@ static inline void SetBitTo(uint8_t* bits, int64_t idx, bool bit_is_set) {
       kBitmask[idx % 8];
 }
 
+/// \brief set or clear a range of bits quickly
+void SetBitsTo(uint8_t* bits, int64_t start_offset, int64_t length, bool bits_are_set);
+
+/// \brief Sets all bits in the bitmap to true
+void SetBitmap(uint8_t* data, int64_t offset, int64_t length);
+
+/// \brief Clears all bits in the bitmap (set to false)
+void ClearBitmap(uint8_t* data, int64_t offset, int64_t length);
+
 // Gets the i-th bit from a byte. Should only be used with i <= 7.
 static constexpr bool GetBitFromByte(uint8_t byte, uint8_t idx) {
   return (byte & kBitmask[idx]) != 0;
+}
+
+// Returns 'value' rounded up to the nearest multiple of 'factor'
+constexpr int64_t RoundUp(int64_t value, int64_t factor) {
+  return CeilDiv(value, factor) * factor;
 }
 
 // Returns 'value' rounded down to the nearest multiple of 'factor'
@@ -141,6 +155,9 @@ static inline int32_t PopCount(uint32_t bitmap) { return QUIVER_POPCOUNT32(bitma
 
 // Bitmask selecting the (k - 1) preceding bits in a byte
 static constexpr std::array<uint8_t, 8> kPrecedingBitmask = {0, 1, 3, 7, 15, 31, 63, 127};
+// the bitwise complement version of kPrecedingBitmask
+static constexpr std::array<uint8_t, 8> kTrailingBitmask = {255, 254, 252, 248,
+                                                            240, 224, 192, 128};
 
 static inline int CountTrailingZeros(uint32_t value) {
 #if defined(__clang__) || defined(__GNUC__)
@@ -194,6 +211,30 @@ static inline int CountTrailingZeros(uint64_t value) {
   }
   return bitpos;
 #endif
+}
+
+/// Returns a mask with lower i bits set to 1. If i >= sizeof(Word)*8, all-ones will be
+/// returned
+/// ex:
+/// ref: https://stackoverflow.com/a/59523400
+template <typename Word>
+constexpr Word PrecedingWordBitmask(unsigned int const i) {
+  return (static_cast<Word>(i < sizeof(Word) * 8) << (i & (sizeof(Word) * 8 - 1))) - 1;
+}
+static_assert(PrecedingWordBitmask<uint8_t>(0) == 0x00);
+static_assert(PrecedingWordBitmask<uint8_t>(4) == 0x0f);
+static_assert(PrecedingWordBitmask<uint8_t>(8) == 0xff);
+static_assert(PrecedingWordBitmask<uint16_t>(8) == 0x00ff);
+
+/// \brief Create a word with low `n` bits from `low` and high `sizeof(Word)-n` bits
+/// from `high`.
+/// Word ret
+/// for (i = 0; i < sizeof(Word)*8; i++){
+///     ret[i]= i < n ? low[i]: high[i];
+/// }
+template <typename Word>
+constexpr Word SpliceWord(int n, Word low, Word high) {
+  return (high & ~PrecedingWordBitmask<Word>(n)) | (low & PrecedingWordBitmask<Word>(n));
 }
 
 }  // namespace quiver::bit_util

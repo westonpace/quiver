@@ -52,9 +52,10 @@ class HashMap {
       ReadOnlyBatch* keys, ReadOnlyBatch* payload, int32_t rows_per_batch,
       std::function<Status(std::unique_ptr<ReadOnlyBatch>)> consumer) = 0;
 
-  static Status Create(const SimpleSchema* key_schema, const SimpleSchema* payload_schema,
-                       std::unique_ptr<hash::Hasher> hasher, StreamSink* sink,
-                       RandomAccessSource* source,
+  static Status Create(const SimpleSchema* key_schema,
+                       const SimpleSchema* build_payload_schema,
+                       const SimpleSchema* probe_payload_schema,
+                       std::unique_ptr<hash::Hasher> hasher, Storage* storage,
                        std::unique_ptr<hashtable::HashTable> hashtable,
                        std::unique_ptr<HashMap>* out);
 };

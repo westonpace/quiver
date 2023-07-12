@@ -7,6 +7,7 @@
 #include <iostream>
 #include <limits>
 #include <span>
+#include <sstream>
 
 #include "quiver/core/array.h"
 #include "quiver/util/logging_p.h"
@@ -23,7 +24,18 @@ StreamSink StreamSink::FromFixedSizeSpan(std::span<uint8_t> span) {
           }};
 }
 
-StreamSink StreamSink::FromFile(int file_descriptor, int32_t write_buffer_size) {
+StreamSink StreamSink::FromPath(const std::string& path, bool direct_io, bool append,
+                                int32_t write_buffer_size) {
+  int flags = O_WRONLY | O_CREAT;
+  if (direct_io) {
+    flags |= O_DIRECT;
+  }
+  if (append) {
+    flags |= O_APPEND;
+  } else {
+    flags |= O_TRUNC;
+  }
+  int file_descriptor = open(path.data(), flags, 0644);
   uint8_t* aligned_buf;
   int ret = posix_memalign((void**)&aligned_buf, 512, write_buffer_size);
   DCHECK_EQ(ret, 0) << "posix_memalign failed";
@@ -92,10 +104,95 @@ std::unique_ptr<RandomAccessSource> RandomAccessSource::FromFile(int file_descri
   return std::make_unique<CFileSource>(file_descriptor, close_on_destruct);
 }
 
-std::unique_ptr<RandomAccessSource> RandomAccessSource::FromPath(std::string_view path) {
-  int file_descriptor = open(path.data(), 0, O_RDONLY);
+std::unique_ptr<RandomAccessSource> RandomAccessSource::FromPath(std::string_view path,
+                                                                 bool is_direct) {
+  int flags = O_RDONLY;
+  if (is_direct) {
+    flags |= O_DIRECT;
+  }
+  int file_descriptor = open(path.data(), flags, 0644);
   DCHECK_GE(file_descriptor, 0) << "failed to open file " << path;
   return RandomAccessSource::FromFile(file_descriptor, /*close_on_destruct=*/true);
+}
+
+class RamStorage : public Storage {
+ public:
+  RamStorage(int64_t size_bytes) : data_(size_bytes) {}
+  Status OpenRandomAccessSource(std::unique_ptr<RandomAccessSource>* out) override {
+    *out = RandomAccessSource::FromSpan(std::span<uint8_t>(data_));
+    return Status::OK();
+  }
+
+  Status OpenStreamSink(std::unique_ptr<StreamSink>* out) override {
+    *out = std::make_unique<StreamSink>(
+        StreamSink::FromFixedSizeSpan(std::span<uint8_t>(data_)));
+    return Status::OK();
+  }
+
+  [[nodiscard]] bool requires_alignment() const override { return false; }
+  // TODO(#3) return actual value
+  [[nodiscard]] int32_t page_size() const override { return 1; }
+
+ private:
+  std::vector<uint8_t> data_;
+};
+
+class FileStorage : public Storage {
+ public:
+  FileStorage(std::string path, bool direct_io)
+      : path_(std::move(path)), direct_io_(direct_io) {}
+
+  Status OpenRandomAccessSource(std::unique_ptr<RandomAccessSource>* out) override {
+    *out = RandomAccessSource::FromPath(path_, direct_io_);
+    return Status::OK();
+  }
+
+  Status OpenStreamSink(std::unique_ptr<StreamSink>* out) override {
+    *out = std::make_unique<StreamSink>(
+        StreamSink::FromPath(path_, direct_io_, /*append=*/false));
+    return Status::OK();
+  }
+
+  [[nodiscard]] bool requires_alignment() const override { return direct_io_; }
+  // TODO(#4) determine actual sector size
+  [[nodiscard]] int32_t page_size() const override { return 4096; }
+
+ private:
+  const std::string path_;
+  const bool direct_io_;
+};
+
+Status Storage::FromSpecifier(const util::Uri& specifier, std::unique_ptr<Storage>* out) {
+  if (specifier.scheme == "ram") {
+    auto size_bytes_str = specifier.query.find("size_bytes");
+    if (size_bytes_str == specifier.query.end()) {
+      return Status::Invalid("RAM specifier must include size_bytes query parameter: ",
+                             specifier.ToString());
+    }
+    std::stringstream size_bytes_stream(size_bytes_str->second);
+    int64_t size_bytes = -1;
+    size_bytes_stream >> size_bytes;
+    if (size_bytes < 0) {
+      return Status::Invalid("RAM specifier does not specify a valid size_bytes: ",
+                             specifier.ToString());
+    }
+    *out = std::make_unique<RamStorage>(size_bytes);
+    return Status::OK();
+  }
+  if (specifier.scheme == "file") {
+    bool direct_io = false;
+    auto direct_str = specifier.query.find("direct");
+    if (direct_str != specifier.query.end()) {
+      std::stringstream direct_stream(direct_str->second);
+      direct_stream >> direct_io;
+      if (direct_stream.fail()) {
+        return Status::Invalid("file specifier does not specify a valid direct: ",
+                               specifier.ToString());
+      }
+    }
+    *out = std::make_unique<FileStorage>(specifier.path, direct_io);
+  }
+  return Status::Invalid("Unrecognized storage specifier: ", specifier.ToString());
 }
 
 }  // namespace quiver

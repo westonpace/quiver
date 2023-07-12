@@ -15,6 +15,7 @@
 #include "quiver/core/io.h"
 #include "quiver/datagen/datagen.h"
 #include "quiver/row/row_p.h"
+#include "quiver/testutil/test_util.h"
 #include "quiver/util/arrow_util.h"
 #include "quiver/util/literals.h"
 #include "quiver/util/local_allocator_p.h"
@@ -52,21 +53,16 @@ const TestData& GetTestData() {
 void DoSetup(const benchmark::State& _state) { GetTestData(); }
 
 void BM_EncodeRows(benchmark::State& state) {
-  auto* buf = new uint8_t[kNumBytes];
-  std::span<uint8_t> buf_span(buf, kNumBytes);
-
-  StreamSink sink = StreamSink::FromFixedSizeSpan(buf_span);
+  std::unique_ptr<Storage> storage = TestStorage(kNumBytes);
 
   const TestData& test_data = GetTestData();
 
   std::unique_ptr<row::RowEncoder> encoder;
-  row::RowEncoder::Create(&test_data.schema, &sink, false, &encoder).AbortNotOk();
+  row::RowEncoder::Create(&test_data.schema, storage.get(), false, &encoder).AbortNotOk();
 
   for (auto _iter : state) {
     int64_t row_id = -1;
     encoder->Append(*test_data.batch, &row_id).AbortNotOk();
-    benchmark::DoNotOptimize(buf);
-    benchmark::ClobberMemory();
   }
   state.SetBytesProcessed(int64_t(state.iterations()) * int64_t(kNumBytes));
 }
@@ -81,22 +77,19 @@ void BenchDecodeMemory(const datagen::GeneratedData& data, benchmark::State& sta
                                       num_rows * static_cast<int64_t>(sizeof(int64_t)));
   }
 
-  util::local_ptr<std::span<uint8_t>> scratch =
-      local_alloc.AllocateSpan<uint8_t>(data.batch->NumBytes() * 2);
+  std::unique_ptr<Storage> storage = TestStorage(data.batch->NumBytes() * 2);
 
-  StreamSink sink = StreamSink::FromFixedSizeSpan(*scratch);
   std::unique_ptr<row::RowEncoder> encoder;
-  row::RowEncoder::Create(&data.schema, &sink, false, &encoder).AbortNotOk();
+  row::RowEncoder::Create(&data.schema, storage.get(), false, &encoder).AbortNotOk();
 
   int64_t row_id;
   encoder->Append(*data.batch, &row_id).AbortNotOk();
 
-  std::unique_ptr<RandomAccessSource> source = RandomAccessSource::FromSpan(*scratch);
   std::unique_ptr<row::RowDecoder> decoder;
   if (staged) {
-    row::RowDecoder::CreateStaged(&data.schema, source.get(), &decoder).AbortNotOk();
+    row::RowDecoder::CreateStaged(&data.schema, storage.get(), &decoder).AbortNotOk();
   } else {
-    row::RowDecoder::Create(&data.schema, source.get(), &decoder).AbortNotOk();
+    row::RowDecoder::Create(&data.schema, storage.get(), &decoder).AbortNotOk();
   }
 
   util::local_ptr<std::span<int64_t>> indices =
@@ -122,7 +115,6 @@ void BenchDecodeFile(const datagen::GeneratedData& data, benchmark::State& state
   }
 
   int scratch_file = fileno(std::tmpfile());
-
   StreamSink sink = StreamSink::FromFile(scratch_file);
   std::unique_ptr<row::RowEncoder> encoder;
   row::RowEncoder::Create(&data.schema, &sink, false, &encoder).AbortNotOk();

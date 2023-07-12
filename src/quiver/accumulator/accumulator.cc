@@ -85,7 +85,13 @@ class FlatColumnAccumulator {
     }
     uint8_t* validity_dst = current_array_.validity.data();
     const uint8_t* validity_src = src.validity.data();
-    util::IndexedCopyBitmap(validity_src, indices, validity_dst, index_in_batch_);
+    if (validity_src == nullptr) {
+      // TODO: Technically this could mean that everything is null.  We should handle
+      // that case too
+      bit_util::SetBitmap(validity_dst, index_in_batch_, src.length);
+    } else {
+      util::IndexedCopyBitmap(validity_src, indices, validity_dst, index_in_batch_);
+    }
     index_in_batch_ += static_cast<int32_t>(indices.size());
   }
 

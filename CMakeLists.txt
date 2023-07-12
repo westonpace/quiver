@@ -66,6 +66,7 @@ add_library(
     src/quiver/store/mmap_store.cc
     src/quiver/util/arrow_util.cc
     src/quiver/util/bitmap_ops.cc
+    src/quiver/util/bit_util.cc
     src/quiver/util/cpu_info.cc
     src/quiver/util/local_allocator_p.cc
     src/quiver/util/logging_p.cc

@@ -12,6 +12,7 @@
 
 #include "quiver/core/array.h"
 #include "quiver/util/literals.h"
+#include "quiver/util/uri.h"
 
 using namespace quiver::util::literals;
 
@@ -87,7 +88,8 @@ class StreamSink {
   // if it ever needs to swap
   static StreamSink FromFixedSizeSpan(std::span<uint8_t> span);
   // Creates a sink that periodically flushes to a file
-  static StreamSink FromFile(int file_descriptor, int32_t write_buffer_size = 16_Ki);
+  static StreamSink FromPath(const std::string& path, bool direct_io, bool append,
+                             int32_t write_buffer_size = 16_Ki);
 
  private:
   uint8_t* buf_;
@@ -111,6 +113,7 @@ class BufferSource {
 class FileSource {
  public:
   explicit FileSource(int file_descriptor) : file_descriptor_(file_descriptor) {}
+  [[nodiscard]] int file_descriptor() const { return file_descriptor_; }
   void CopyDataInto(uint8_t* dest, int64_t offset, int32_t len) const {
     lseek(file_descriptor_, offset, SEEK_SET);
     auto num_read = static_cast<int32_t>(read(file_descriptor_, dest, len));
@@ -133,10 +136,25 @@ class RandomAccessSource {
   static std::unique_ptr<RandomAccessSource> FromSpan(std::span<uint8_t> span);
   static std::unique_ptr<RandomAccessSource> FromFile(int file_descriptor,
                                                       bool close_on_destruct);
-  static std::unique_ptr<RandomAccessSource> FromPath(std::string_view path);
+  static std::unique_ptr<RandomAccessSource> FromPath(std::string_view path,
+                                                      bool is_direct);
 
  private:
   RandomAccessSourceKind kind_;
+};
+
+class Storage {
+ public:
+  [[nodiscard]] virtual Status OpenRandomAccessSource(
+      std::unique_ptr<RandomAccessSource>* out) = 0;
+  [[nodiscard]] virtual Status OpenStreamSink(std::unique_ptr<StreamSink>* out) = 0;
+  static Status FromSpecifier(const util::Uri& specifier, std::unique_ptr<Storage>* out);
+
+  /// Return true if the storage requires reads and writes to operate on page-aligned
+  /// buffers
+  [[nodiscard]] virtual bool requires_alignment() const = 0;
+  /// The page_size of the storage.  This is needed if the storage requires alignment
+  [[nodiscard]] virtual int32_t page_size() const = 0;
 };
 
 }  // namespace quiver

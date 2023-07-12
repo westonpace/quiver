@@ -9,7 +9,7 @@ import pytest
 # Number of columns to use as keys
 NUM_KEYS = [1, 2, 4, 8]
 # The width of each row, in bytes
-ROW_WIDTH_BYTES = [64, 4096, 16384]
+ROW_WIDTH_BYTES = [16384, 4096, 64]
 # Note, the actual fields will be randomly generated and have a width
 # of 1, 2, 4, or 8 bytes each.  The total number of fields is thus random
 # but we know there will be at least ROW_WIDTH_BYTES / 8 fields.  So the
@@ -20,9 +20,9 @@ if (max(NUM_KEYS) * 8) > min(ROW_WIDTH_BYTES):
 
 ### Data size ###
 # The size of the build table, in bytes
-BUILD_SIZE_BYTES = [1 * 1024 * 1024]
+BUILD_SIZE_BYTES = [1024 * 1024 * 1024]
 # The size of the probe table, in bytes
-PROBE_SIZE_BYTES = [4 * 1024 * 1024]
+PROBE_SIZE_BYTES = [4 * 1024 * 1024 * 1024]
 
 ### Join parameters
 # Percentage of probe rows that match a build row
@@ -72,7 +72,12 @@ def generate_combined_schema(row_width_bytes, num_keys):
     while bytes_remaining > 0:
         field_width_bytes = RNG.choice([1, 2, 4, 8])
         if field_width_bytes > bytes_remaining:
-            field_width_bytes = bytes_remaining
+            if bytes_remaining >= 4:
+                field_width_bytes = 4
+            if bytes_remaining >= 2:
+                field_width_bytes = 2
+            else:
+                field_width_bytes = 1
         bytes_remaining -= field_width_bytes
         if field_width_bytes == 1:
             field_type = pa.int8()
@@ -83,7 +88,7 @@ def generate_combined_schema(row_width_bytes, num_keys):
         elif field_width_bytes == 8:
             field_type = pa.int64()
         else:
-            raise Exception("Invalid field width ${field_width_bytes}")
+            raise Exception(f"Invalid field width {field_width_bytes}")
         if len(fields) < num_keys:
             name = f"key{len(fields)}"
         else:
@@ -179,8 +184,8 @@ def generate_build_data(combined_schema, build_size_bytes, row_width_bytes):
     return generate_random_table(combined_schema, num_build_rows)
 
 
-def create_hashmap(key_schema, payload_schema):
-    return pyquiver.HashMap(key_schema, payload_schema)
+def create_hashmap(key_schema, build_payload_schema, probe_payload_schema):
+    return pyquiver.HashMap(key_schema, build_payload_schema, probe_payload_schema)
 
 
 def insert_hashes(table, key_schema):
@@ -190,7 +195,10 @@ def insert_hashes(table, key_schema):
     return table.add_column(0, "hash", hashes)
 
 
-def simulate_inner_join(hashmap, build_data, probe_data):
+def simulate_inner_join(
+    key_schema, build_payload_schema, probe_payload_schema, build_data, probe_data
+):
+    hashmap = create_hashmap(key_schema, build_payload_schema, probe_payload_schema)
     hashmap.insert(build_data)
 
     def consume(batch):
@@ -235,19 +243,20 @@ def test_join_scenario(
         probe_data = insert_hashes(probe_data, key_schema)
         key_schema = key_schema.insert(0, pa.field("hash", pa.int64()))
 
-    hashmap = create_hashmap(key_schema, payload_schema)
-    args = [hashmap, build_data, probe_data]
-    print("Hashing")
-    benchmark.pedantic(
-        simulate_inner_join, args=args, rounds=3, iterations=1, warmup_rounds=1
+    simulate_inner_join(
+        key_schema, payload_schema, payload_schema, build_data, probe_data
     )
 
 
-class MockBenchmark(object):
-    def pedantic(self, func, args, rounds, iterations, warmup_rounds):
-        func(*args)
+if __name__ == "__main__":
 
+    class MockBenchmark(object):
+        def pedantic(self, func, args, rounds, iterations, warmup_rounds):
+            func(*args)
 
-for scenario in scenarios[:1]:
-    print(f"Testing scenario {scenario}")
-    test_join_scenario(*scenario, benchmark=MockBenchmark())
+    for idx, scenario in enumerate(scenarios):
+        print(f"{idx}: {scenario}")
+
+    for idx, scenario in enumerate(scenarios):
+        print(f"Testing scenario {idx}: {scenario}")
+        test_join_scenario(*scenario, benchmark=MockBenchmark())

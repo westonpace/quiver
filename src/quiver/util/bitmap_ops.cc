@@ -209,12 +209,12 @@ void IndexedCopyBitmap(const uint8_t* bitmap, std::span<const IndexType> indices
 
 void IndexedCopyBitmap(const uint8_t* bitmap, std::span<const int32_t> indices,
                        uint8_t* dest, int64_t dest_offset) {
-  return IndexedCopyBitmap<int32_t>(bitmap, indices, dest, dest_offset);
+  IndexedCopyBitmap<int32_t>(bitmap, indices, dest, dest_offset);
 }
 
 void IndexedCopyBitmap(const uint8_t* bitmap, std::span<const int64_t> indices,
                        uint8_t* dest, int64_t dest_offset) {
-  return IndexedCopyBitmap<int64_t>(bitmap, indices, dest, dest_offset);
+  IndexedCopyBitmap<int64_t>(bitmap, indices, dest, dest_offset);
 }
 
 void ReverseBlockOffsets(const uint8_t* data, int64_t offset, int64_t length,

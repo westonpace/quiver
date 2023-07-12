@@ -8,6 +8,7 @@
 #include "quiver/core/io.h"
 #include "quiver/hash/hasher.h"
 #include "quiver/row/row_p.h"
+#include "quiver/util/bit_util.h"
 #include "quiver/util/local_allocator_p.h"
 
 namespace quiver::map {
@@ -53,19 +54,32 @@ class KeyPayloadBatch : public ReadOnlyBatch {
 
 class HashMapImpl : public HashMap {
  public:
-  HashMapImpl(const SimpleSchema* key_schema, const SimpleSchema* payload_schema,
+  HashMapImpl(const SimpleSchema* key_schema, const SimpleSchema* build_payload_schema,
+              const SimpleSchema* probe_payload_schema,
               std::unique_ptr<hash::Hasher> hasher,
               std::unique_ptr<hashtable::HashTable> hashtable)
       : key_schema_(key_schema),
-        payload_schema_(payload_schema),
-        combined_schema_(SimpleSchema::AllColumnsFrom(*key_schema_, *payload_schema_)),
+        build_payload_schema_(build_payload_schema),
+        probe_payload_schema_(probe_payload_schema),
+        build_schema_(SimpleSchema::AllColumnsFrom(*key_schema_, *build_payload_schema_)),
+        probe_schema_(),
+        joined_schema_(),
         hasher_(std::move(hasher)),
-        hashtable_(std::move(hashtable)) {}
+        hashtable_(std::move(hashtable)) {
+    if (probe_payload_schema_ != nullptr) {
+      probe_schema_ = SimpleSchema::AllColumnsFrom(*key_schema_, *probe_payload_schema_);
+      joined_schema_ =
+          SimpleSchema::AllColumnsFrom(build_schema_, *probe_payload_schema_);
+    }
+    for (const auto& field : joined_schema_.top_level_types) {
+      row_width_bytes_ += field.data_width_bytes;
+    }
+  }
 
-  Status Init(StreamSink* sink, RandomAccessSource* source) {
+  Status Init(Storage* storage) {
     QUIVER_RETURN_NOT_OK(
-        row::RowEncoder::Create(&combined_schema_, sink, false, &row_encoder_));
-    return row::RowDecoder::Create(&combined_schema_, source, &row_decoder_);
+        row::RowEncoder::Create(&build_schema_, storage, false, &row_encoder_));
+    return row::RowDecoder::Create(&build_schema_, storage, &row_decoder_);
   }
 
   Status Insert(ReadOnlyBatch* keys, ReadOnlyBatch* payload) override {
@@ -73,7 +87,7 @@ class HashMapImpl : public HashMap {
         local_alloc_.AllocateSpan<int64_t>(keys->length());
     QUIVER_RETURN_NOT_OK(hasher_->HashBatch(keys, *hashes));
 
-    KeyPayloadBatch key_payload(key_schema_, payload_schema_, &combined_schema_, keys,
+    KeyPayloadBatch key_payload(key_schema_, build_payload_schema_, &build_schema_, keys,
                                 payload);
 
     int64_t row_id_start;
@@ -132,32 +146,31 @@ class HashMapImpl : public HashMap {
   }
 
   struct CombinedAccumulator {
-    std::unique_ptr<accum::Accumulator> keys;
-    std::unique_ptr<accum::Accumulator> payload;
-    std::unique_ptr<ReadOnlyBatch> staged_keys;
-    const SimpleSchema* combined_schema;
-    std::function<Status(std::unique_ptr<ReadOnlyBatch>)> consumer;
+    std::unique_ptr<accum::Accumulator> build;
+    std::unique_ptr<accum::Accumulator> probe_payload;
+    std::unique_ptr<ReadOnlyBatch> staged_build;
 
-    CombinedAccumulator(int64_t rows_per_batch, const SimpleSchema* keys_schema,
-                        const SimpleSchema* payload_schema,
-                        const SimpleSchema* combined_schema,
-                        std::function<Status(std::unique_ptr<ReadOnlyBatch>)> consumer)
-        : combined_schema(combined_schema), consumer(std::move(consumer)) {
-      keys = accum::Accumulator::FixedMemory(keys_schema, rows_per_batch,
-                                             [&](std::unique_ptr<ReadOnlyBatch> batch) {
-                                               DCHECK_EQ(staged_keys, nullptr);
-                                               staged_keys = std::move(batch);
-                                               return Status::OK();
-                                             });
-      payload = accum::Accumulator::FixedMemory(
-          payload_schema, rows_per_batch, [this](std::unique_ptr<ReadOnlyBatch> batch) {
-            DCHECK_NE(staged_keys, nullptr);
-            auto* keys_as_batch = static_cast<Batch*>(staged_keys.get());
-            auto* payload_as_batch = static_cast<Batch*>(batch.get());
-            QUIVER_RETURN_NOT_OK(keys_as_batch->Combine(std::move(*payload_as_batch),
-                                                        this->combined_schema));
-            QUIVER_RETURN_NOT_OK(this->consumer(std::move(staged_keys)));
-            staged_keys.reset();
+    CombinedAccumulator(int64_t rows_per_batch, const SimpleSchema* build_schema,
+                        const SimpleSchema* probe_payload_schema,
+                        const SimpleSchema* join_schema,
+                        std::function<Status(std::unique_ptr<ReadOnlyBatch>)> consumer) {
+      build = accum::Accumulator::FixedMemory(build_schema, rows_per_batch,
+                                              [&](std::unique_ptr<ReadOnlyBatch> batch) {
+                                                DCHECK_EQ(staged_build, nullptr);
+                                                staged_build = std::move(batch);
+                                                return Status::OK();
+                                              });
+      probe_payload = accum::Accumulator::FixedMemory(
+          probe_payload_schema, rows_per_batch,
+          [this, join_schema,
+           consumer = std::move(consumer)](std::unique_ptr<ReadOnlyBatch> batch) {
+            DCHECK_NE(staged_build, nullptr);
+            auto* build_as_batch = static_cast<Batch*>(staged_build.get());
+            auto* probe_as_batch = static_cast<Batch*>(batch.get());
+            QUIVER_RETURN_NOT_OK(
+                build_as_batch->Combine(std::move(*probe_as_batch), join_schema));
+            QUIVER_RETURN_NOT_OK(consumer(std::move(staged_build)));
+            staged_build.reset();
             return Status::OK();
           });
     }
@@ -166,25 +179,41 @@ class HashMapImpl : public HashMap {
   Status InnerJoin(
       ReadOnlyBatch* keys, ReadOnlyBatch* payload, int32_t rows_per_batch,
       std::function<Status(std::unique_ptr<ReadOnlyBatch>)> consumer) override {
+    if (probe_payload_schema_ == nullptr) {
+      return Status::Invalid(
+          "Probe schema was not provided at construction.  InnerJoin cannot be used.");
+    }
     util::local_ptr<std::span<int64_t>> hashes =
         local_alloc_.AllocateSpan<int64_t>(keys->length());
     QUIVER_RETURN_NOT_OK(hasher_->HashBatch(keys, *hashes));
 
+    constexpr int64_t kDefaultBatchSizeBytes = 16_MiLL;
+    if (rows_per_batch < 0) {
+      rows_per_batch = static_cast<int32_t>(
+          bit_util::FloorDiv(kDefaultBatchSizeBytes, row_width_bytes_));
+      if (rows_per_batch < 2_KiLL) {
+        rows_per_batch = 2_KiLL;
+      }
+    }
+    std::cout << "Given row width of " << row_width_bytes_ << " we are using batches of "
+              << rows_per_batch << std::endl;
+
     // Somewhat arbitrary but we do have to be larger than 2048 to ensure
-    // the combined accumulator is at least 2 mini batches large
-    if (rows_per_batch < 16_KiLL) {
+    // the combined accumulator is at least 2 mini batches large. We could improve
+    // if needed
+    if (rows_per_batch < 2_KiLL) {
       return Status::Invalid("rows_per_batch must be >= 16Ki");
     }
 
     constexpr int64_t kMiniBatchSize = 1024;
 
-    std::unique_ptr<Batch> scratch = Batch::CreateBasic(&combined_schema_);
+    std::unique_ptr<Batch> scratch = Batch::CreateBasic(&build_schema_);
     util::local_ptr<std::span<int64_t>> out_row_ids =
         local_alloc_.AllocateSpan<int64_t>(kMiniBatchSize);
     util::local_ptr<std::span<int32_t>> in_row_ids =
         local_alloc_.AllocateSpan<int32_t>(kMiniBatchSize);
-    CombinedAccumulator accumulator(rows_per_batch, key_schema_, payload_schema_,
-                                    &combined_schema_, std::move(consumer));
+    CombinedAccumulator accumulator(rows_per_batch, &build_schema_, probe_payload_schema_,
+                                    &joined_schema_, std::move(consumer));
     int64_t bucket_offset = 0;
     int64_t hash_offset = 0;
     int64_t length_out = 0;
@@ -195,37 +224,44 @@ class HashMapImpl : public HashMap {
 
       std::span<int64_t> key_row_ids = out_row_ids->subspan(0, length_out);
       QUIVER_RETURN_NOT_OK(row_decoder_->Load(key_row_ids, scratch.get()));
-      QUIVER_RETURN_NOT_OK(accumulator.keys->InsertRange(scratch.get()));
+      QUIVER_RETURN_NOT_OK(accumulator.build->InsertRange(scratch.get()));
 
       std::span<int32_t> payload_row_ids = in_row_ids->subspan(0, length_out);
-      QUIVER_RETURN_NOT_OK(accumulator.payload->InsertIndexed(payload, payload_row_ids));
+      QUIVER_RETURN_NOT_OK(
+          accumulator.probe_payload->InsertIndexed(payload, payload_row_ids));
     }
 
-    QUIVER_RETURN_NOT_OK(accumulator.keys->Finish());
-    QUIVER_RETURN_NOT_OK(accumulator.payload->Finish());
+    QUIVER_RETURN_NOT_OK(accumulator.build->Finish());
+    QUIVER_RETURN_NOT_OK(accumulator.probe_payload->Finish());
 
     return Status::OK();
   }
 
  private:
   const SimpleSchema* key_schema_;
-  const SimpleSchema* payload_schema_;
-  const SimpleSchema combined_schema_;
+  const SimpleSchema* build_payload_schema_;
+  const SimpleSchema* probe_payload_schema_;
+  const SimpleSchema build_schema_;
+  SimpleSchema probe_schema_;
+  SimpleSchema joined_schema_;
   std::unique_ptr<hash::Hasher> hasher_;
   std::unique_ptr<row::RowEncoder> row_encoder_;
   std::unique_ptr<row::RowDecoder> row_decoder_;
   std::unique_ptr<hashtable::HashTable> hashtable_;
   util::LocalAllocator local_alloc_;
+  int64_t row_width_bytes_ = 0;
 };
 
-Status HashMap::Create(const SimpleSchema* key_schema, const SimpleSchema* payload_schema,
-                       std::unique_ptr<hash::Hasher> hasher, StreamSink* sink,
-                       RandomAccessSource* source,
+Status HashMap::Create(const SimpleSchema* key_schema,
+                       const SimpleSchema* build_payload_schema,
+                       const SimpleSchema* probe_payload_schema,
+                       std::unique_ptr<hash::Hasher> hasher, Storage* storage,
                        std::unique_ptr<hashtable::HashTable> hashtable,
                        std::unique_ptr<HashMap>* out) {
-  auto hash_map = std::make_unique<HashMapImpl>(key_schema, payload_schema,
-                                                std::move(hasher), std::move(hashtable));
-  QUIVER_RETURN_NOT_OK(hash_map->Init(sink, source));
+  auto hash_map = std::make_unique<HashMapImpl>(key_schema, build_payload_schema,
+                                                probe_payload_schema, std::move(hasher),
+                                                std::move(hashtable));
+  QUIVER_RETURN_NOT_OK(hash_map->Init(storage));
   *out = std::move(hash_map);
   return Status::OK();
 }

@@ -8,6 +8,7 @@
 
 #include <source_location>
 
+#include "quiver/testutil/tmpfiles.h"
 #include "quiver/util/arrow_util.h"
 #include "quiver/util/local_allocator_p.h"
 #include "quiver/util/logging_p.h"
@@ -160,6 +161,21 @@ SchemaAndBatch TestBatch(std::vector<std::shared_ptr<arrow::Array>> arrays) {
       ImportBatch(c_data_arr.get(), &schema_and_batch.schema, &schema_and_batch.batch));
 
   return schema_and_batch;
+}
+
+std::unique_ptr<Storage> TestStorage(int64_t size_bytes) {
+  std::unique_ptr<Storage> storage;
+  util::Uri specifier{"ram", "", {{"size_bytes", std::to_string(size_bytes)}}};
+  AssertOk(Storage::FromSpecifier(specifier, &storage));
+  return storage;
+}
+
+std::unique_ptr<Storage> TmpFileStorage(bool direct_io) {
+  std::string path = testing::TemporaryFiles().NewTemporaryFile();
+  std::unique_ptr<Storage> storage;
+  util::Uri specifier{"file", path, {{"direct", direct_io ? "true" : "false"}}};
+  AssertOk(Storage::FromSpecifier(specifier, &storage));
+  return storage;
 }
 
 }  // namespace quiver

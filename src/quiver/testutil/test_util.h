@@ -5,8 +5,13 @@
 #include <source_location>
 
 #include "quiver/core/array.h"
+#include "quiver/core/io.h"
+#include "quiver/testutil/tmpfiles.h"
+#include "quiver/util/literals.h"
 #include "quiver/util/local_allocator_p.h"
 #include "quiver/util/status.h"
+
+using namespace quiver::util::literals;
 
 namespace quiver {
 
@@ -77,5 +82,8 @@ struct SchemaAndBatch {
 };
 
 SchemaAndBatch TestBatch(std::vector<std::shared_ptr<arrow::Array>> arrays);
+
+std::unique_ptr<Storage> TestStorage(int64_t size_bytes = 64_MiLL);
+std::unique_ptr<Storage> TmpFileStorage();
 
 }  // namespace quiver
