@@ -580,8 +580,10 @@ class StagedRowDecoderImpl : public RowDecoder {
 
 class IoUringSource {
  public:
-  IoUringSource(int file_descriptor, int32_t queue_depth)
-      : file_descriptor_(file_descriptor), queue_depth_(queue_depth) {}
+  IoUringSource(int file_descriptor, int32_t queue_depth, bool direct_io)
+      : file_descriptor_(file_descriptor),
+        queue_depth_(queue_depth),
+        direct_io_(direct_io) {}
 
   void Init() {
     struct io_uring_params params;
@@ -655,9 +657,10 @@ class IoUringSource {
     sqe->len = len;
     sqe->off = offset;
     sqe->user_data = user_data;
-    DCHECK_EQ(len % 512, 0);
-    DCHECK_EQ(offset % 512, 0);
-    DCHECK_EQ(sqe->addr % 512, 0);
+    // If direct_io_ validate that they are reading the file correctly
+    DCHECK((!direct_io_) || (len % 512 == 0));
+    DCHECK((!direct_io_) || (offset % 512 == 0));
+    DCHECK((!direct_io_) || (sqe->addr % 512 == 0));
     sring_array_[index] = index;
     tail++;
     /* Update the tail */
@@ -702,6 +705,7 @@ class IoUringSource {
   int file_descriptor_;
   int ring_descriptor_;
   int32_t queue_depth_;
+  bool direct_io_;
   std::byte* sq_ptr_;
   std::byte* cq_ptr_;
   std::atomic_uint32_t* sring_tail_;
@@ -833,7 +837,7 @@ class IoUringDecoderImpl : public RowDecoder {
     DCHECK(file_source_.has_value()) << "Call to Load without Initialize";
     IoUringSource src(
         file_source_->file_descriptor(),  // NOLINT(bugprone-unchecked-optional-access)
-        kIoUringDepth);
+        kIoUringDepth, storage_->requires_alignment());
     src.Init();
     return DoLoad(src, indices, out);
   }
@@ -852,7 +856,11 @@ class IoUringDecoderImpl : public RowDecoder {
 
 Status RowDecoder::Create(const SimpleSchema* schema, Storage* storage,
                           std::unique_ptr<RowDecoder>* out) {
-  RowSchema row_schema(sizeof(int64_t), sizeof(int64_t));
+  int32_t row_alignment = sizeof(int64_t);
+  if (storage->requires_alignment()) {
+    row_alignment = storage->page_size();
+  }
+  RowSchema row_schema(row_alignment, sizeof(int64_t));
   QUIVER_RETURN_NOT_OK(row_schema.Initialize(*schema));
   auto impl = std::make_unique<RowDecoderImpl>(std::move(row_schema), storage);
   QUIVER_RETURN_NOT_OK(impl->Initialize());
@@ -862,7 +870,11 @@ Status RowDecoder::Create(const SimpleSchema* schema, Storage* storage,
 
 Status RowDecoder::CreateStaged(const SimpleSchema* schema, Storage* storage,
                                 std::unique_ptr<RowDecoder>* out) {
-  RowSchema row_schema(sizeof(int64_t), sizeof(int64_t));
+  int32_t row_alignment = sizeof(int64_t);
+  if (storage->requires_alignment()) {
+    row_alignment = storage->page_size();
+  }
+  RowSchema row_schema(row_alignment, sizeof(int64_t));
   QUIVER_RETURN_NOT_OK(row_schema.Initialize(*schema));
   auto impl = std::make_unique<StagedRowDecoderImpl>(std::move(row_schema), storage);
   QUIVER_RETURN_NOT_OK(impl->Initialize());

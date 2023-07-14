@@ -43,9 +43,9 @@ StreamSink StreamSink::FromPath(const std::string& path, bool direct_io, bool ap
   DCHECK_EQ(reinterpret_cast<intptr_t>(buf_ptr.get()) % 512, 0)
       << " buffer must be aligned to 512 bytes";
   std::function<uint8_t*(uint8_t*, int32_t, int32_t*)> flush =
-      [file_descriptor, buf = std::move(buf_ptr), size = write_buffer_size](
+      [direct_io, file_descriptor, buf = std::move(buf_ptr), size = write_buffer_size](
           uint8_t* start, int32_t len, int32_t* remaining) mutable -> uint8_t* {
-    DCHECK_EQ(len % 512, 0);
+    DCHECK((!direct_io) || (len % 512 == 0));
     DCHECK_EQ(reinterpret_cast<intptr_t>(start) % 512, 0);
     auto written = static_cast<int32_t>(write(file_descriptor, start, len));
     DCHECK_EQ(len, written) << "expected to write " << len << " bytes, but wrote "
@@ -183,14 +183,19 @@ Status Storage::FromSpecifier(const util::Uri& specifier, std::unique_ptr<Storag
     bool direct_io = false;
     auto direct_str = specifier.query.find("direct");
     if (direct_str != specifier.query.end()) {
-      std::stringstream direct_stream(direct_str->second);
-      direct_stream >> direct_io;
-      if (direct_stream.fail()) {
-        return Status::Invalid("file specifier does not specify a valid direct: ",
-                               specifier.ToString());
+      if (direct_str->second == "true") {
+        direct_io = true;
+      } else if (direct_str->second == "false") {
+        direct_io = false;
+      } else {
+        return Status::Invalid(
+            "file specifier does not specify a valid value for the direct query "
+            "parameter (must be \"true\" or \"false\"): ",
+            specifier.ToString());
       }
     }
     *out = std::make_unique<FileStorage>(specifier.path, direct_io);
+    return Status::OK();
   }
   return Status::Invalid("Unrecognized storage specifier: ", specifier.ToString());
 }

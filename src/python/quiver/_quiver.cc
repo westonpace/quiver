@@ -13,6 +13,7 @@
 #include "quiver/util/arrow_util.h"
 #include "quiver/util/literals.h"
 #include "quiver/util/status.h"
+#include "quiver/util/uri.h"
 
 using namespace quiver::util::literals;
 
@@ -94,14 +95,33 @@ pybind11::object BatchToPyarrow(quiver::ReadOnlyBatch&& batch) {
   return import_fn(c_data_array_ptr, c_data_schema_ptr);
 }
 
-class HashMap {
+quiver::util::Uri UriFromPython(const std::string& scheme, const std::string& path,
+                                const pybind11::dict& query) {
+  std::unordered_map<std::string, std::string> query_params;
+  for (const auto& item : query) {
+    if (!pybind11::isinstance<pybind11::str>(item.first) ||
+        !pybind11::isinstance<pybind11::str>(item.second)) {
+      throw pybind11::type_error("Expected string key/value in query parameters");
+    }
+    auto key_str = item.first.cast<pybind11::str>();
+    auto val_str = item.second.cast<pybind11::str>();
+    query_params[key_str] = val_str;
+  }
+  return quiver::util::Uri{scheme, path, std::move(query_params)};
+}
+
+class CHashMap {
  public:
-  HashMap(const pybind11::handle& key_schema,
-          const pybind11::handle& build_payload_schema,
-          const pybind11::handle& probe_payload_schema) {
+  CHashMap(const pybind11::handle& key_schema,
+           const pybind11::handle& build_payload_schema,
+           const pybind11::handle& probe_payload_schema, const std::string& sd_scheme,
+           const std::string& sd_path, const pybind11::dict& sd_query) {
     ThrowNotOk(SchemaFromPyarrow(key_schema, &key_schema_));
     ThrowNotOk(SchemaFromPyarrow(build_payload_schema, &build_payload_schema_));
     ThrowNotOk(SchemaFromPyarrow(probe_payload_schema, &probe_payload_schema_));
+    quiver::util::Uri storage_descriptor_uri =
+        UriFromPython(sd_scheme, sd_path, sd_query);
+    ThrowNotOk(quiver::Storage::FromSpecifier(storage_descriptor_uri, &storage_));
     build_schema_ =
         quiver::SimpleSchema::AllColumnsFrom(key_schema_, build_payload_schema_);
     probe_schema_ =
@@ -116,18 +136,13 @@ class HashMap {
     probe_payload_indices_.resize(probe_payload_schema_.num_fields());
     std::iota(probe_payload_indices_.begin(), probe_payload_indices_.end(),
               key_schema_.num_fields());
-    scratch_.resize(1_MiLL);
-    std::span<uint8_t> scratch_span{scratch_.data(), scratch_.size()};
-    sink_ = std::make_unique<quiver::StreamSink>(
-        quiver::StreamSink::FromFixedSizeSpan(scratch_span));
-    source_ = quiver::RandomAccessSource::FromSpan(scratch_span);
     std::unique_ptr<quiver::hash::Hasher> hasher =
         quiver::hash::Hasher::CreateIdentityHasher();
     std::unique_ptr<quiver::hashtable::HashTable> hashtable =
         quiver::hashtable::HashTable::MakeStl();
     ThrowNotOk(quiver::map::HashMap::Create(
         &key_schema_, &build_payload_schema_, &probe_payload_schema_, std::move(hasher),
-        sink_.get(), source_.get(), std::move(hashtable), &hashmap_));
+        storage_.get(), std::move(hashtable), &hashmap_));
   }
 
   void Insert(const pybind11::handle& batch) {
@@ -179,19 +194,17 @@ class HashMap {
   quiver::SimpleSchema build_schema_;
   quiver::SimpleSchema probe_schema_;
   quiver::SimpleSchema join_schema_;
-  std::vector<uint8_t> scratch_;
   std::vector<int32_t> key_indices_;
   std::vector<int32_t> build_payload_indices_;
   std::vector<int32_t> probe_payload_indices_;
-  std::unique_ptr<quiver::StreamSink> sink_;
-  std::unique_ptr<quiver::RandomAccessSource> source_;
+  std::unique_ptr<quiver::Storage> storage_;
   std::unique_ptr<quiver::map::HashMap> hashmap_;
 };
 
-class Accumulator {
+class CAccumulator {
  public:
-  Accumulator(const pybind11::handle& schema, int32_t rows_per_batch,
-              pybind11::function callback)
+  CAccumulator(const pybind11::handle& schema, int32_t rows_per_batch,
+               pybind11::function callback)
       : callback_(std::move(callback)) {
     ThrowNotOk(SchemaFromPyarrow(schema, &schema_));
     auto q_callback = [this](std::unique_ptr<quiver::ReadOnlyBatch> q_batch) {
@@ -219,12 +232,12 @@ class Accumulator {
   pybind11::function callback_;
 };
 
-PYBIND11_MODULE(pyquiver, mod) {
+PYBIND11_MODULE(_quiver, mod) {
   // Clang format will mess up the formatting of the docstrings and so we disable it
   // clang-format off
   mod.doc() = "A set of unique collections for Arrow data";
-  pybind11::class_<HashMap>(mod, "HashMap")
-      .def(pybind11::init<const pybind11::handle&, const pybind11::handle&, const pybind11::handle&>(), R"(
+  pybind11::class_<CHashMap>(mod, "CHashMap")
+      .def(pybind11::init<const pybind11::handle&, const pybind11::handle&, const pybind11::handle&, const std::string&, const std::string&, const pybind11::dict&>(), R"(
         Creates a HashMap with the given schemas
 
         A HashMap will encode batches of data into a hashtable.  The HashMap can
@@ -233,8 +246,8 @@ PYBIND11_MODULE(pyquiver, mod) {
         The HashMap can be configured to act either as a map or a multi-map.
         When configured as a map then only the latest payload is kept for each
         combination of keys.
-      )", pybind11::arg("key_schema"), pybind11::arg("build_payload_schema"), pybind11::arg("probe_payload_schema") = pybind11::none())
-      .def("insert", &HashMap::Insert, R"(
+      )", pybind11::arg("key_schema"), pybind11::arg("build_payload_schema"), pybind11::arg("probe_payload_schema") = pybind11::none(), pybind11::arg("storage_descriptor_scheme") = "mem", pybind11::arg("storage_descriptor_path") = "", pybind11::arg("storage_descriptor_query") = pybind11::none())
+      .def("insert", &CHashMap::Insert, R"(
         Inserts a batch of data into the hashmap.
 
         Parameters
@@ -244,10 +257,10 @@ PYBIND11_MODULE(pyquiver, mod) {
             The batch to insert.  The schema should be the combined key + payload
             schema.  Each row will be inserted into the map.
       )", pybind11::arg("key_value_batch"))
-      .def("lookup", &HashMap::Lookup, R"(
+      .def("lookup", &CHashMap::Lookup, R"(
         Given a batch of keys, returns the payloads that correspond to those keys.
       )", pybind11::arg("keys_batch"))
-      .def("inner_join", &HashMap::InnerJoin, R"(
+      .def("inner_join", &CHashMap::InnerJoin, R"(
         Performs an inner_join on a batch of data.
 
         Each row of data will be searched in the map.  For each matching row stored
@@ -278,7 +291,7 @@ PYBIND11_MODULE(pyquiver, mod) {
             16MB of data per batch.
       )", pybind11::arg("batch"), pybind11::arg("callback"),
           pybind11::arg("rows_per_batch") = -1);
-  pybind11::class_<Accumulator>(mod, "Accumulator")
+  pybind11::class_<CAccumulator>(mod, "CAccumulator")
       .def(pybind11::init<const pybind11::handle&, int32_t, pybind11::function>(), R"(
             Creates an accumulator which will accumulate data into(typically larger)
             batches of a given size.This is faster than collecting all the batches
@@ -286,11 +299,11 @@ PYBIND11_MODULE(pyquiver, mod) {
             groups of rows into a larger batch.
       )", pybind11::arg("schema"), pybind11::arg("rows_per_batch"),
           pybind11::arg("callback"))
-      .def("insert", &Accumulator::Insert, R"(
+      .def("insert", &CAccumulator::Insert, R"(
             Inserts a batch of data into the accumulator.  If enough rows have accumulated
             then this will trigger a call to the callback.
            )", pybind11::arg("batch"))
-      .def("finish", &Accumulator::Finish, R"(
+      .def("finish", &CAccumulator::Finish, R"(
             Finishes the accumulation and triggers a call to the callback with the
             final (short) batch.
            )");

@@ -171,7 +171,7 @@ std::unique_ptr<Storage> TestStorage(int64_t size_bytes) {
 }
 
 std::unique_ptr<Storage> TmpFileStorage(bool direct_io) {
-  std::string path = testing::TemporaryFiles().NewTemporaryFile();
+  std::string path = testutil::TemporaryFiles().NewTemporaryFile();
   std::unique_ptr<Storage> storage;
   util::Uri specifier{"file", path, {{"direct", direct_io ? "true" : "false"}}};
   AssertOk(Storage::FromSpecifier(specifier, &storage));

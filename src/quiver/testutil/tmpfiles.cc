@@ -5,7 +5,7 @@
 #include <memory>
 #include <system_error>
 
-namespace quiver::testing {
+namespace quiver::testutil {
 
 constexpr int32_t kMaxTmpDirCreateAttempts = 1000;
 
@@ -66,4 +66,4 @@ TemporaryFilesManager& TemporaryFiles() {
   return *temporary_files;
 }
 
-}  // namespace quiver::testing
+}  // namespace quiver::testutil

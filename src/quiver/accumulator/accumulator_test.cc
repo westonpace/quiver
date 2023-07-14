@@ -34,7 +34,7 @@ TEST(Accumulator, Random) {
   };
 
   std::unique_ptr<Accumulator> accumulator =
-      Accumulator::FixedMemory(&data.schema, kBatchSize, append_chunk);
+      Accumulator::FixedMemory(data.schema.get(), kBatchSize, append_chunk);
 
   int64_t offset = 0;
   while (offset < kNumRows) {

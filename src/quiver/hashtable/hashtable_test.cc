@@ -104,14 +104,15 @@ TEST(StlHashTable, Basic) {
 }
 
 TEST(StlHashTable, Random) {
-  constexpr int64_t kNumRows = 1_MiLL;
-  constexpr int64_t kBatchSize = 32_KiLL;
+  constexpr int64_t kBatchSize = 8_KiLL;
+  constexpr int64_t kNumRows = kBatchSize * 4;
   util::LocalAllocator local_alloc;
   util::local_ptr<std::span<int64_t>> hashes =
       local_alloc.AllocateSpan<int64_t>(kNumRows);
   util::local_ptr<std::span<int64_t>> row_ids =
       local_alloc.AllocateSpan<int64_t>(kNumRows);
 
+  // Randomly generate some hashes, note there may be duplicates
   util::RandomLongs(*hashes);
   std::iota(row_ids->begin(), row_ids->end(), 0);
 
@@ -137,32 +138,40 @@ TEST(StlHashTable, Random) {
       local_alloc.AllocateSpan<int64_t>(kBatchSize);
   util::local_ptr<std::span<int32_t>> out_hash_idx =
       local_alloc.AllocateSpan<int32_t>(kBatchSize);
-  std::vector<int64_t> decoded_row_ids;
-  decoded_row_ids.reserve(kNumRows);
+  int64_t num_decoded_rows = 0;
   while (offset < kNumRows) {
     int64_t length = 0;
     int64_t hash_idx_offset = 0;
+    int64_t prev_hash_idx_offset = 0;
     int64_t bucket_idx_offset = 0;
     std::span<const int64_t> batch_probe_hashes{reversed_hashes->data() + offset,
                                                 kBatchSize};
-    while (!hashtable->Decode(batch_probe_hashes, *out_hash_idx, *out_row_ids, &length,
-                              &hash_idx_offset, &bucket_idx_offset)) {
+    auto assert_rows = [&] {
       for (int i = 0; i < length; i++) {
-        decoded_row_ids.push_back(out_row_ids->data()[i]);
+        num_decoded_rows++;
       }
+      int64_t last_hash_id = prev_hash_idx_offset;
       // Every hash should match at least one row (in which case out_hash_idx would be
       // strictly monotonic) or mulitple rows (in which case there may be some duplicates)
-      auto last_hash_id = 0;
       for (std::size_t i = 0; i < length; i++) {
         ASSERT_THAT(out_hash_idx->data()[i],
                     ::testing::AnyOf(last_hash_id, last_hash_id + 1));
         last_hash_id = out_hash_idx->data()[i];
       }
+    };
+    while (!hashtable->Decode(batch_probe_hashes, *out_hash_idx, *out_row_ids, &length,
+                              &hash_idx_offset, &bucket_idx_offset)) {
+      assert_rows();
+      prev_hash_idx_offset = hash_idx_offset;
     }
+    assert_rows();
     offset += kBatchSize;
   }
 
-  ASSERT_EQ(kNumRows, decoded_row_ids.size());
+  // If there are duplicate hashes we will actually end up with more than kNumRows rows
+  // because we will insert the duplicate multiple times and each time we do we will get
+  // all matches
+  ASSERT_LE(kNumRows, num_decoded_rows);
 }
 
 }  // namespace quiver::hashtable

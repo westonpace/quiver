@@ -3,7 +3,7 @@
 
 #include <string>
 
-namespace quiver::testing {
+namespace quiver::testutil {
 
 class TemporaryFilesManager {
  public:
@@ -12,4 +12,4 @@ class TemporaryFilesManager {
 
 TemporaryFilesManager& TemporaryFiles();
 
-}  // namespace quiver::testing
+}  // namespace quiver::testutil

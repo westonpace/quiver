@@ -6,8 +6,6 @@
 
 namespace quiver::util {
 
-LocalAllocator::LocalAllocator() : data_(kInitialSize) {}
-
 local_ptr<FlatArray> LocalAllocator::AllocateFlatArray(int32_t data_width_bytes,
                                                        int64_t num_elements,
                                                        bool allocate_validity) {
@@ -35,8 +33,13 @@ uint8_t* LocalAllocator::AllocateBuffer(int64_t size_bytes) {
   int64_t start = total_allocated_bytes_;
   total_allocated_bytes_ += size_bytes;
   if (total_allocated_bytes_ > static_cast<int64_t>(data_.size())) {
-    int64_t new_size = bit_util::CeilDiv(total_allocated_bytes_, kChunkSize) * kChunkSize;
-    data_.resize(new_size);
+    desired_allocated_bytes_ = total_allocated_bytes_;
+    // We cannot immediately resize because that would invalidate all previously returned
+    // pointers Instead we enter "on-demand mode" and allocate a new chunk for every
+    // request.  Once the local allocator is idle again we can resize.
+    allocations_performed_++;
+    chunks_.emplace_back(size_bytes);
+    return chunks_.back().data();
   }
 
   return data_.data() + start;
@@ -44,8 +47,20 @@ uint8_t* LocalAllocator::AllocateBuffer(int64_t size_bytes) {
 
 void LocalAllocator::Free(int32_t allocation_id, int64_t size) {
   DCHECK_EQ(allocation_id, allocation_id_counter_ - 1);
-  allocation_id_counter_--;
+  if QUIVER_UNLIKELY (!chunks_.empty()) {
+    chunks_.pop_back();
+  }
   total_allocated_bytes_ -= size;
+  if QUIVER_UNLIKELY (--allocation_id_counter_ == 0) {
+    DCHECK_EQ(total_allocated_bytes_, 0);
+    // We are idle again, resize the buffer if we need to
+    if (desired_allocated_bytes_ >= 0) {
+      int64_t new_size = bit_util::RoundUp(desired_allocated_bytes_, chunk_size_);
+      allocations_performed_++;
+      data_.resize(new_size);
+      desired_allocated_bytes_ = -1;
+    }
+  }
 }
 
 }  // namespace quiver::util

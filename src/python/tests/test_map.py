@@ -1,6 +1,6 @@
 import pyarrow as pa
 
-import pyquiver
+from quiver.collections import HashMap
 
 
 class Schemas(object):
@@ -19,7 +19,7 @@ class Schemas(object):
 def build_map():
     schemas = Schemas()
 
-    map = pyquiver.HashMap(schemas.keys, schemas.build_payload, schemas.probe_payload)
+    map = HashMap(schemas.keys, schemas.build_payload, schemas.probe_payload)
 
     keys = pa.array([5, 4, 1, 2], pa.int64())
     x = pa.array([None, 1, 17, 0], pa.int32())

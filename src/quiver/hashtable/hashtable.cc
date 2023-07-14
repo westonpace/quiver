@@ -25,7 +25,7 @@ class StlHashTable : public HashTable {
     auto hash_itr = hashes.begin();
     auto row_id_itr = row_ids.begin();
     while (hash_itr != hashes.end()) {
-      map_.insert({*hash_itr, row_ids[*row_id_itr]});
+      map_.insert({*hash_itr, *row_id_itr});
       hash_itr++;
       row_id_itr++;
     }

@@ -84,6 +84,6 @@ struct SchemaAndBatch {
 SchemaAndBatch TestBatch(std::vector<std::shared_ptr<arrow::Array>> arrays);
 
 std::unique_ptr<Storage> TestStorage(int64_t size_bytes = 64_MiLL);
-std::unique_ptr<Storage> TmpFileStorage();
+std::unique_ptr<Storage> TmpFileStorage(bool direct_io = false);
 
 }  // namespace quiver

@@ -1,6 +1,6 @@
 import pyarrow as pa
 
-import pyquiver
+from quiver.collections import Accumulator
 
 
 def test_basic():
@@ -10,7 +10,7 @@ def test_basic():
     def callback(batch):
         accumulated_batches.append(batch)
 
-    accumulator = pyquiver.Accumulator(schema, 5000, callback)
+    accumulator = Accumulator(schema, 5000, callback)
 
     data = [1, None, 2, None, 3, 4, None, 5, 6, 7]
 

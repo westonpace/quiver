@@ -1,3 +1,5 @@
 FROM quay.io/pypa/manylinux_2_28_x86_64
 
-CMD bash
+COPY . /quiver
+
+ENTRYPOINT /quiver/ci/wheels/manylinux/build.sh

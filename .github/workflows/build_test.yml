@@ -1,0 +1,24 @@
+name: Build & Test
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  buildtest:
+    name: Build wheels and test install
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      - name: Build & run
+        run: docker run -v wheelhouse:/quiver/wheelhouse --rm $(docker build -q --file ./ci/wheels/manylinux/2_28-x86_64.Dockerfile .)
+
+      - uses: actions/upload-artifact@v3
+        with:
+          name: wheels
+          path: wheelhouse/*

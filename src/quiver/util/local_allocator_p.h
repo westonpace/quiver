@@ -47,7 +47,13 @@ class local_ptr {
 
 class LocalAllocator {
  public:
-  LocalAllocator();
+  static constexpr int64_t kDefaultChunkSize = 1024LL * 1024LL;
+  static constexpr int64_t kDefaultInitialSize = 16LL * kDefaultChunkSize;
+
+  LocalAllocator(int64_t initial_size = kDefaultInitialSize,
+                 int64_t chunk_size = kDefaultChunkSize)
+      : chunk_size_(chunk_size), data_(initial_size) {}
+
   local_ptr<FlatArray> AllocateFlatArray(int32_t data_width_bytes, int64_t num_elements,
                                          bool allocate_validity = true);
 
@@ -60,16 +66,24 @@ class LocalAllocator {
     return local_ptr<std::span<T>>(span, this, allocation_id_counter_++, num_bytes);
   }
 
- private:
-  static constexpr int64_t kChunkSize = 1024LL * 1024LL;
-  static constexpr int64_t kInitialSize = 16LL * kChunkSize;
+  [[nodiscard]] int64_t num_allocations_performed() const {
+    return allocations_performed_;
+  }
 
+  [[nodiscard]] int64_t capacity() const { return static_cast<int64_t>(data_.size()); }
+
+ private:
   uint8_t* AllocateBuffer(int64_t size_bytes);
   void Free(int32_t allocation_id, int64_t size);
 
+  const int64_t chunk_size_;
   std::vector<uint8_t> data_;
+  std::vector<std::vector<uint8_t>> chunks_;
   int32_t allocation_id_counter_ = 0;
   int64_t total_allocated_bytes_ = 0;
+  int64_t desired_allocated_bytes_ = -1;
+  // Track the # of allocations performed for unit tests & debugging
+  int64_t allocations_performed_ = 1;
   template <typename T>
   friend class local_ptr;
 };

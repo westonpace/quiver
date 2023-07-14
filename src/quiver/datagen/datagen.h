@@ -7,12 +7,12 @@
 namespace quiver::datagen {
 
 struct GeneratedData {
-  SimpleSchema schema;
+  std::unique_ptr<SimpleSchema> schema;
   std::unique_ptr<ReadOnlyBatch> batch;
 };
 
 struct GeneratedMutableData {
-  SimpleSchema schema;
+  std::unique_ptr<SimpleSchema> schema;
   std::unique_ptr<Batch> batch;
 };
 

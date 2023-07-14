@@ -85,12 +85,13 @@ class DataGeneratorImpl : public DataGenerator {
 
   GeneratedMutableData NMutableRows(int64_t num_rows) override {
     GeneratedMutableData out;
+    out.schema = std::make_unique<SimpleSchema>();
     std::unique_ptr<SchemaBuilder> schema_builder = SchemaBuilder::Start();
     for (auto* field_builder : field_builders_) {
       schema_builder->Field(field_builder->CreateBuilder());
     }
-    QUIVER_DCHECK_OK(schema_builder->Finish(&out.schema));
-    std::unique_ptr<Batch> batch = Batch::CreateBasic(&out.schema);
+    QUIVER_DCHECK_OK(schema_builder->Finish(out.schema.get()));
+    std::unique_ptr<Batch> batch = Batch::CreateBasic(out.schema.get());
     batch->SetLength(num_rows);
     for (int32_t field_idx = 0; field_idx < static_cast<int32_t>(field_builders_.size());
          field_idx++) {

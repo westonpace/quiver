@@ -56,28 +56,12 @@ struct RowCodecParams {
 
 class RowEncodingTest : public ::testing::TestWithParam<RowCodecParams> {
  public:
-  RowEncodingTest()
-      : scratch_buffer_(kEnoughBytesForScratch),
-        scratch_(scratch_buffer_.data(), scratch_buffer_.size()),
-        sink_(StreamSink::FromFixedSizeSpan(scratch_)),
-        source_(RandomAccessSource::FromSpan(scratch_)){};
-
-  ~RowEncodingTest() override { CloseTmpFileIfOpen(); }
-
   DecoderType GetDecoderType() { return GetParam().decoder_type; }
 
-  bool NeedsScratchFile() {
+  bool IsFileStorage() {
     return GetDecoderType() == DecoderType::kFile ||
            GetDecoderType() == DecoderType::kFileStaged ||
            GetDecoderType() == DecoderType::kIoUring;
-  }
-
-  void CloseTmpFileIfOpen() {
-    if (scratch_file_ >= 0) {
-      int err = close(scratch_file_);
-      ASSERT_EQ(err, 0);
-      scratch_file_ = -1;
-    }
   }
 
   bool IsDecoderStaged() {
@@ -86,43 +70,27 @@ class RowEncodingTest : public ::testing::TestWithParam<RowCodecParams> {
   }
 
   void Init() {
-    CloseTmpFileIfOpen();
-    if (NeedsScratchFile()) {
-      scratch_file_ = fileno(std::tmpfile());
-      ASSERT_GE(scratch_file_, 0);
-    }
-    switch (GetDecoderType()) {
-      case DecoderType::kMemory:
-      case DecoderType::kMemoryStaged:
-        source_ = RandomAccessSource::FromSpan(scratch_);
-        sink_ = StreamSink::FromFixedSizeSpan(scratch_);
-        break;
-      case DecoderType::kFile:
-      case DecoderType::kFileStaged:
-        source_ = RandomAccessSource::FromFile(scratch_file_, false);
-        sink_ = StreamSink::FromFile(scratch_file_);
-        break;
-      case DecoderType::kIoUring:
-        sink_ = StreamSink::FromFile(scratch_file_);
-        // source_ is not needed for IoUring decoder
-        break;
+    if (IsFileStorage()) {
+      storage_ = TmpFileStorage(/*direct_io=*/false);
+    } else {
+      storage_ = TestStorage();
     }
   }
 
-  std::unique_ptr<row::RowEncoder> CreateEncoder(const SimpleSchema* schema) {
+  std::unique_ptr<row::RowEncoder> CreateEncoder(const SimpleSchema* schema) const {
     std::unique_ptr<RowEncoder> encoder;
-    AssertOk(row::RowEncoder::Create(schema, &sink_, false, &encoder));
+    AssertOk(row::RowEncoder::Create(schema, storage_.get(), false, &encoder));
     return encoder;
   }
 
   std::unique_ptr<row::RowDecoder> CreateDecoder(const SimpleSchema* schema) {
     std::unique_ptr<RowDecoder> decoder;
     if (GetDecoderType() == DecoderType::kIoUring) {
-      AssertOk(row::RowDecoder::CreateIoUring(schema, scratch_file_, false, &decoder));
+      AssertOk(row::RowDecoder::CreateIoUring(schema, storage_.get(), &decoder));
     } else if (IsDecoderStaged()) {
-      AssertOk(row::RowDecoder::CreateStaged(schema, source_.get(), &decoder));
+      AssertOk(row::RowDecoder::CreateStaged(schema, storage_.get(), &decoder));
     } else {
-      AssertOk(row::RowDecoder::Create(schema, source_.get(), &decoder));
+      AssertOk(row::RowDecoder::Create(schema, storage_.get(), &decoder));
     }
     return decoder;
   }
@@ -149,11 +117,7 @@ class RowEncodingTest : public ::testing::TestWithParam<RowCodecParams> {
     ASSERT_TRUE(output->BinaryEquals(*data.batch));
   }
 
-  std::vector<uint8_t> scratch_buffer_;
-  std::span<uint8_t> scratch_;
-  int scratch_file_ = -1;
-  StreamSink sink_;
-  std::unique_ptr<RandomAccessSource> source_;
+  std::unique_ptr<Storage> storage_;
 };
 
 TEST_P(RowEncodingTest, BasicRoundTrip) {
@@ -166,7 +130,7 @@ TEST_P(RowEncodingTest, BasicRoundTrip) {
 
   // Same round trip but with a partial read
   std::unique_ptr<RowEncoder> encoder = CreateEncoder(&data.schema);
-  AssertOk(row::RowEncoder::Create(&data.schema, &sink_, false, &encoder));
+  AssertOk(row::RowEncoder::Create(&data.schema, storage_.get(), false, &encoder));
   int64_t row_id = -1;
   AssertOk(encoder->Append(*data.batch, &row_id));
   DCHECK_EQ(0, row_id);

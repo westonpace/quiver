@@ -16,6 +16,7 @@
 #include "quiver/datagen/datagen.h"
 #include "quiver/row/row_p.h"
 #include "quiver/testutil/test_util.h"
+#include "quiver/testutil/tmpfiles.h"
 #include "quiver/util/arrow_util.h"
 #include "quiver/util/literals.h"
 #include "quiver/util/local_allocator_p.h"
@@ -80,16 +81,17 @@ void BenchDecodeMemory(const datagen::GeneratedData& data, benchmark::State& sta
   std::unique_ptr<Storage> storage = TestStorage(data.batch->NumBytes() * 2);
 
   std::unique_ptr<row::RowEncoder> encoder;
-  row::RowEncoder::Create(&data.schema, storage.get(), false, &encoder).AbortNotOk();
+  row::RowEncoder::Create(data.schema.get(), storage.get(), false, &encoder).AbortNotOk();
 
   int64_t row_id;
   encoder->Append(*data.batch, &row_id).AbortNotOk();
 
   std::unique_ptr<row::RowDecoder> decoder;
   if (staged) {
-    row::RowDecoder::CreateStaged(&data.schema, storage.get(), &decoder).AbortNotOk();
+    row::RowDecoder::CreateStaged(data.schema.get(), storage.get(), &decoder)
+        .AbortNotOk();
   } else {
-    row::RowDecoder::Create(&data.schema, storage.get(), &decoder).AbortNotOk();
+    row::RowDecoder::Create(data.schema.get(), storage.get(), &decoder).AbortNotOk();
   }
 
   util::local_ptr<std::span<int64_t>> indices =
@@ -97,7 +99,7 @@ void BenchDecodeMemory(const datagen::GeneratedData& data, benchmark::State& sta
   std::iota(indices->begin(), indices->end(), 0);
   util::Shuffle(*indices);
   std::unique_ptr<Batch> batch =
-      Batch::CreateInitializedBasic(&data.schema, data.batch->NumBytes());
+      Batch::CreateInitializedBasic(data.schema.get(), data.batch->NumBytes());
 
   for (auto _iter : state) {
     decoder->Load(*indices, batch.get()).AbortNotOk();
@@ -114,21 +116,20 @@ void BenchDecodeFile(const datagen::GeneratedData& data, benchmark::State& state
                                       num_rows * static_cast<int64_t>(sizeof(int64_t)));
   }
 
-  int scratch_file = fileno(std::tmpfile());
-  StreamSink sink = StreamSink::FromFile(scratch_file);
+  std::unique_ptr<Storage> storage = TmpFileStorage(/*direct_io=*/true);
+
   std::unique_ptr<row::RowEncoder> encoder;
-  row::RowEncoder::Create(&data.schema, &sink, false, &encoder).AbortNotOk();
+  row::RowEncoder::Create(data.schema.get(), storage.get(), false, &encoder).AbortNotOk();
 
   int64_t row_id;
   encoder->Append(*data.batch, &row_id).AbortNotOk();
 
-  std::unique_ptr<RandomAccessSource> source =
-      RandomAccessSource::FromFile(scratch_file, true);
   std::unique_ptr<row::RowDecoder> decoder;
   if (staged) {
-    row::RowDecoder::CreateStaged(&data.schema, source.get(), &decoder).AbortNotOk();
+    row::RowDecoder::CreateStaged(data.schema.get(), storage.get(), &decoder)
+        .AbortNotOk();
   } else {
-    row::RowDecoder::Create(&data.schema, source.get(), &decoder).AbortNotOk();
+    row::RowDecoder::Create(data.schema.get(), storage.get(), &decoder).AbortNotOk();
   }
 
   util::local_ptr<std::span<int64_t>> indices =
@@ -136,7 +137,7 @@ void BenchDecodeFile(const datagen::GeneratedData& data, benchmark::State& state
   std::iota(indices->begin(), indices->end(), 0);
   util::Shuffle(*indices);
   std::unique_ptr<Batch> batch =
-      Batch::CreateInitializedBasic(&data.schema, data.batch->NumBytes());
+      Batch::CreateInitializedBasic(data.schema.get(), data.batch->NumBytes());
 
   for (auto _iter : state) {
     decoder->Load(*indices, batch.get()).AbortNotOk();
@@ -152,28 +153,29 @@ void BenchDecodeIoUring(const datagen::GeneratedData& data, benchmark::State& st
                                       num_rows * static_cast<int64_t>(sizeof(int64_t)));
   }
 
+  std::unique_ptr<Storage> storage = TmpFileStorage(/*direct_io=*/true);
+
   // int scratch_file = fileno(std::tmpfile());
   int scratch_file =
       open("/tmp/scratch_file", O_TRUNC | O_DIRECT | O_RDWR | O_CREAT, 0644);
   QUIVER_CHECK_GE(scratch_file, 0) << "scratch file open failed " << strerror(errno);
 
-  StreamSink sink = StreamSink::FromFile(scratch_file);
   std::unique_ptr<row::RowEncoder> encoder;
-  row::RowEncoder::Create(&data.schema, &sink, true, &encoder).AbortNotOk();
+  row::RowEncoder::Create(data.schema.get(), storage.get(), true, &encoder).AbortNotOk();
 
   int64_t row_id;
   encoder->Append(*data.batch, &row_id).AbortNotOk();
   encoder->Finish();
 
   std::unique_ptr<row::RowDecoder> decoder;
-  row::RowDecoder::CreateIoUring(&data.schema, scratch_file, true, &decoder).AbortNotOk();
+  row::RowDecoder::CreateIoUring(data.schema.get(), storage.get(), &decoder).AbortNotOk();
 
   util::local_ptr<std::span<int64_t>> indices =
       local_alloc.AllocateSpan<int64_t>(num_rows);
   std::iota(indices->begin(), indices->end(), 0);
   util::Shuffle(*indices);
   std::unique_ptr<Batch> batch =
-      Batch::CreateInitializedBasic(&data.schema, data.batch->NumBytes());
+      Batch::CreateInitializedBasic(data.schema.get(), data.batch->NumBytes());
 
   for (auto _iter : state) {
     decoder->Load(*indices, batch.get()).AbortNotOk();

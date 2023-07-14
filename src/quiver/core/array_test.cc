@@ -92,7 +92,7 @@ TEST(ReadOnlyBatch, SelectView) {
                                     ->Field(datagen::Flat(8, 8))
                                     ->NRows(1024);
 
-  SimpleSchema sub_schema = data.schema.Select({0, 2});
+  SimpleSchema sub_schema = data.schema->Select({0, 2});
   ASSERT_EQ(sub_schema.num_types(), 2);
   std::unique_ptr<ReadOnlyBatch> view = data.batch->SelectView({0, 2}, &sub_schema);
 
@@ -106,14 +106,15 @@ TEST(SimpleSchema, AllColumnsFrom) {
   datagen::GeneratedData right =
       datagen::Gen()->FlatFieldsWithNBytesTotalWidth(64, 1, 8)->NRows(16);
 
-  SimpleSchema combined = SimpleSchema::AllColumnsFrom(left.schema, right.schema);
-  ASSERT_EQ(combined.num_fields(), left.schema.num_fields() + right.schema.num_fields());
-  ASSERT_EQ(combined.num_types(), left.schema.num_types() + right.schema.num_types());
-  for (int i = 0; i < left.schema.num_fields(); i++) {
-    ASSERT_EQ(combined.field(i), left.schema.field(i));
+  SimpleSchema combined = SimpleSchema::AllColumnsFrom(*left.schema, *right.schema);
+  ASSERT_EQ(combined.num_fields(),
+            left.schema->num_fields() + right.schema->num_fields());
+  ASSERT_EQ(combined.num_types(), left.schema->num_types() + right.schema->num_types());
+  for (int i = 0; i < left.schema->num_fields(); i++) {
+    ASSERT_EQ(combined.field(i), left.schema->field(i));
   }
-  for (int i = 0; i < right.schema.num_fields(); i++) {
-    ASSERT_EQ(combined.field(i + left.schema.num_fields()), right.schema.field(i));
+  for (int i = 0; i < right.schema->num_fields(); i++) {
+    ASSERT_EQ(combined.field(i + left.schema->num_fields()), right.schema->field(i));
   }
 }
 
@@ -127,7 +128,7 @@ TEST(BasicBatch, Combine) {
                                             ->Field(datagen::Flat(8, 8))
                                             ->NMutableRows(16);
 
-  SimpleSchema combined = SimpleSchema::AllColumnsFrom(left.schema, right.schema);
+  SimpleSchema combined = SimpleSchema::AllColumnsFrom(*left.schema, *right.schema);
 
   ReadOnlyFlatArray right_sample_arr = std::get<ReadOnlyFlatArray>(right.batch->array(0));
   std::vector<uint8_t> right_sample_arr_data(right_sample_arr.values.size());
