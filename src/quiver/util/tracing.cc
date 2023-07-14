@@ -202,6 +202,8 @@ uint64_t SumCounts(const std::vector<uint64_t>& counts) {
 void Tracer::Print() {
   int32_t max_label_length = MaxCategoryLabelLength(CategoryLabels());
   int32_t max_count_length = MaxCountLength(counts_);
+  std::cout << RightPad("Category", max_label_length) << "| "
+            << "Duration(ns)" << std::endl;
   for (std::size_t i = 0; i < counts_.size(); ++i) {
     if (counts_[i] > 0) {
       std::cout << RightPad(CategoryLabels()[i], max_label_length) << "| "
@@ -213,6 +215,10 @@ void Tracer::Print() {
 void Tracer::PrintHistogram(int32_t width) {
   int32_t max_label_length = MaxCategoryLabelLength(CategoryLabels());
   uint64_t count_sum = SumCounts(counts_);
+  auto hash_width = static_cast<int32_t>(
+      std::round(static_cast<double>(count_sum) / static_cast<double>(width)));
+  std::cout << RightPad("Category", max_label_length) << "| "
+            << "Duration(# = " << hash_width << "ns)" << std::endl;
   for (std::size_t i = 0; i < counts_.size(); ++i) {
     if (counts_[i] > 0) {
       double bar_width_dbl =
