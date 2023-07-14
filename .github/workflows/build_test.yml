@@ -18,6 +18,9 @@ jobs:
       - name: Build & run
         run: docker run -v wheelhouse:/quiver/wheelhouse --rm $(docker build -q --file ./ci/wheels/manylinux/2_28-x86_64.Dockerfile .)
 
+      - name: Debug files
+        run: find .
+
       - uses: actions/upload-artifact@v3
         with:
           name: wheels
