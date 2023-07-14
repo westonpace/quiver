@@ -16,10 +16,10 @@ jobs:
           submodules: recursive
 
       - name: Build & run
-        run: docker run -v wheelhouse:/quiver/wheelhouse --rm $(docker build -q --file ./ci/wheels/manylinux/2_28-x86_64.Dockerfile .)
+        run: docker run -v ${{ github.workspace }}/wheelhouse:/quiver/wheelhouse --rm $(docker build -q --file ./ci/wheels/manylinux/2_28-x86_64.Dockerfile .)
 
       - name: Debug files
-        run: find .
+        run: find ${{ github.workspace }}
 
       - uses: actions/upload-artifact@v3
         with:
