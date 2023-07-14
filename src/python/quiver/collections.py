@@ -5,7 +5,7 @@ from typing import Callable
 from ._quiver import CHashMap, CAccumulator
 
 
-DEFAULT_BATCH_SIZE = 1024 * 1024
+DEFAULT_RAM_STORAGE_SIZE = 64 * 1024 * 1024
 
 
 def _ensure_compatible_schema(
@@ -34,10 +34,15 @@ class HashMap(object):
         if storage_descriptor is None:
             scheme = "ram"
             path = "/"
-            query_dict = {"size_bytes": str(64 * 1024 * 1024)}
+            query_dict = {"size_bytes": str(DEFAULT_RAM_STORAGE_SIZE)}
         else:
             (scheme, _, path, _, query, _) = urllib.parse.urlparse(storage_descriptor)
             query_dict = urllib.parse.parse_qs(query)
+            for key in query_dict.keys():
+                current = query_dict[key]
+                if len(current) > 1:
+                    raise ValueError("Duplicate query parameter: " + key)
+                query_dict[key] = current[0]
         self._map = CHashMap(
             key_schema,
             build_payload_schema,
@@ -99,7 +104,7 @@ class HashMap(object):
         self,
         key_values: pa.RecordBatch | pa.Table,
         callback: Callable[[pa.RecordBatch], None],
-        rows_per_batch: int = DEFAULT_BATCH_SIZE,
+        rows_per_batch: int = -1,
     ) -> None:
         _ensure_compatible_schema(key_values, self.probe_schema)
         return self._map.inner_join(key_values, callback, rows_per_batch)
@@ -109,7 +114,7 @@ class HashMap(object):
         keys: pa.RecordBatch | pa.Table,
         values: pa.RecordBatch | pa.Table,
         callback: Callable[[pa.RecordBatch], None],
-        rows_per_batch: int = DEFAULT_BATCH_SIZE,
+        rows_per_batch: int = -1,
     ) -> None:
         _ensure_compatible_schema(keys, self.key_schema)
         _ensure_compatible_schema(values, self.probe_payload_schema)

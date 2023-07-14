@@ -4,6 +4,7 @@
 
 #include "quiver/core/array.h"
 #include "quiver/util/logging_p.h"
+#include "quiver/util/tracing.h"
 
 namespace quiver::hash {
 
@@ -11,7 +12,12 @@ namespace {
 
 class IdentityHasherImpl : public Hasher {
  public:
+  IdentityHasherImpl() {
+    util::Tracer::RegisterCategory(util::tracecat::kHasherHash, "Hasher::Hash");
+  }
+
   Status HashBatch(ReadOnlyBatch* batch, std::span<int64_t> out) override {
+    auto scope = util::Tracer::GetCurrent()->ScopeActivity(util::tracecat::kHasherHash);
     if (batch->schema()->num_fields() == 0) {
       return Status::Invalid(
           "The identity hasher cannot hash a batch with no columns.  The first column "

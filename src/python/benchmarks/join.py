@@ -2,14 +2,17 @@ import math
 import numpy as np
 import polars
 import pyarrow as pa
-import pyquiver
+import pyarrow.compute as pc
+import quiver.collections
+import quiver
 import pytest
 
 ### Data shape ###
 # Number of columns to use as keys
 NUM_KEYS = [1, 2, 4, 8]
 # The width of each row, in bytes
-ROW_WIDTH_BYTES = [16384, 4096, 64]
+# ROW_WIDTH_BYTES = [16384, 4096, 64]
+ROW_WIDTH_BYTES = [4096, 64]
 # Note, the actual fields will be randomly generated and have a width
 # of 1, 2, 4, or 8 bytes each.  The total number of fields is thus random
 # but we know there will be at least ROW_WIDTH_BYTES / 8 fields.  So the
@@ -20,9 +23,11 @@ if (max(NUM_KEYS) * 8) > min(ROW_WIDTH_BYTES):
 
 ### Data size ###
 # The size of the build table, in bytes
-BUILD_SIZE_BYTES = [1024 * 1024 * 1024]
+# BUILD_SIZE_BYTES = [1024 * 1024 * 1024]
+BUILD_SIZE_BYTES = [128 * 1024 * 1024]
 # The size of the probe table, in bytes
-PROBE_SIZE_BYTES = [4 * 1024 * 1024 * 1024]
+# PROBE_SIZE_BYTES = [4 * 1024 * 1024 * 1024]
+PROBE_SIZE_BYTES = [1 * 1024 * 1024 * 1024]
 
 ### Join parameters
 # Percentage of probe rows that match a build row
@@ -70,7 +75,12 @@ def generate_combined_schema(row_width_bytes, num_keys):
     bytes_remaining = row_width_bytes
     fields = []
     while bytes_remaining > 0:
-        field_width_bytes = RNG.choice([1, 2, 4, 8])
+        if len(fields) < num_keys:
+            # Keys need to be 8 bytes otherwise we don't get enough distinct
+            # values when we only have a single key
+            field_width_bytes = 8
+        else:
+            field_width_bytes = RNG.choice([1, 2, 4, 8])
         if field_width_bytes > bytes_remaining:
             if bytes_remaining >= 4:
                 field_width_bytes = 4
@@ -185,7 +195,12 @@ def generate_build_data(combined_schema, build_size_bytes, row_width_bytes):
 
 
 def create_hashmap(key_schema, build_payload_schema, probe_payload_schema):
-    return pyquiver.HashMap(key_schema, build_payload_schema, probe_payload_schema)
+    return quiver.collections.HashMap(
+        key_schema,
+        build_payload_schema,
+        probe_payload_schema,
+        "ram:///?size_bytes=2147483647",
+    )
 
 
 def insert_hashes(table, key_schema):
@@ -195,6 +210,9 @@ def insert_hashes(table, key_schema):
     return table.add_column(0, "hash", hashes)
 
 
+total_rows = 0
+
+
 def simulate_inner_join(
     key_schema, build_payload_schema, probe_payload_schema, build_data, probe_data
 ):
@@ -202,8 +220,10 @@ def simulate_inner_join(
     hashmap.insert(build_data)
 
     def consume(batch):
+        global total_rows
+        total_rows += batch.num_rows
         print(
-            f"Join returned batch with {batch.num_rows} rows and {batch.num_columns} columns"
+            f"Join returned batch with {batch.num_rows}({total_rows}) rows and {batch.num_columns} columns"
         )
 
     return hashmap.inner_join(probe_data, consume)
@@ -241,11 +261,17 @@ def test_join_scenario(
         print("Calculating hashes")
         build_data = insert_hashes(build_data, key_schema)
         probe_data = insert_hashes(probe_data, key_schema)
-        key_schema = key_schema.insert(0, pa.field("hash", pa.int64()))
+        key_schema = key_schema.insert(0, pa.field("hash", pa.uint64()))
 
+    print(pc.count_distinct(build_data.column(0)))
+    print(pc.count_distinct(probe_data.column(0)))
+
+    quiver.clear_tracing()
     simulate_inner_join(
         key_schema, payload_schema, payload_schema, build_data, probe_data
     )
+    quiver.print_tracing()
+    quiver.print_tracing_histogram()
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@
 #include "quiver/core/io.h"
 #include "quiver/util/bit_util.h"
 #include "quiver/util/memory.h"
+#include "quiver/util/tracing.h"
 #include "quiver/util/variant_p.h"
 
 /*
@@ -274,7 +275,10 @@ class ContiguousListEncoder {
 class RowEncoderImpl : public RowEncoder {
  public:
   RowEncoderImpl(RowSchema schema, Storage* storage)
-      : schema_(std::move(schema)), storage_(storage) {}
+      : schema_(std::move(schema)), storage_(storage) {
+    util::Tracer::RegisterCategory(util::tracecat::kRowEncoderEncode,
+                                   "RowEncoder::Encode");
+  }
 
   Status Initialize() {
     QUIVER_RETURN_NOT_OK(storage_->OpenStreamSink(&sink_));
@@ -295,6 +299,8 @@ class RowEncoderImpl : public RowEncoder {
   }
 
   Status Append(const ReadOnlyBatch& batch, int64_t* out_row_id) override {
+    auto trace_scope =
+        util::Tracer::GetCurrent()->ScopeActivity(util::tracecat::kRowEncoderEncode);
     *out_row_id = row_id_counter_;
     row_id_counter_ += batch.length();
     // Prepare
@@ -417,7 +423,10 @@ class FlatDecoder {
 class RowDecoderImpl : public RowDecoder {
  public:
   RowDecoderImpl(RowSchema schema, Storage* storage)
-      : schema_(std::move(schema)), storage_(storage) {}
+      : schema_(std::move(schema)), storage_(storage) {
+    util::Tracer::RegisterCategory(util::tracecat::kRowDecoderDecode,
+                                   "RowDecoder::Decode");
+  }
 
   Status Initialize() {
     QUIVER_RETURN_NOT_OK(storage_->OpenRandomAccessSource(&source_));
@@ -475,6 +484,8 @@ class RowDecoderImpl : public RowDecoder {
   }
 
   Status Load(std::span<int64_t> indices, Batch* out) override {
+    auto trace_scope =
+        util::Tracer::GetCurrent()->ScopeActivity(util::tracecat::kRowDecoderDecode);
     switch (source_->kind()) {
       case RandomAccessSourceKind::kBuffer:
         return DoLoad(source_->AsBuffer(), indices, out);
@@ -498,7 +509,10 @@ class RowDecoderImpl : public RowDecoder {
 class StagedRowDecoderImpl : public RowDecoder {
  public:
   StagedRowDecoderImpl(RowSchema schema, Storage* storage)
-      : schema_(std::move(schema)), storage_(storage) {}
+      : schema_(std::move(schema)), storage_(storage) {
+    util::Tracer::RegisterCategory(util::tracecat::kRowDecoderDecode,
+                                   "RowDecoder::Decode");
+  }
 
   Status Initialize() {
     QUIVER_RETURN_NOT_OK(storage_->OpenRandomAccessSource(&source_));
@@ -558,6 +572,8 @@ class StagedRowDecoderImpl : public RowDecoder {
   }
 
   Status Load(std::span<int64_t> indices, Batch* out) override {
+    auto trace_scope =
+        util::Tracer::GetCurrent()->ScopeActivity(util::tracecat::kRowDecoderDecode);
     switch (source_->kind()) {
       case RandomAccessSourceKind::kBuffer:
         return DoLoad(source_->AsBuffer(), indices, out);
@@ -725,6 +741,8 @@ class IoUringDecoderImpl : public RowDecoder {
 
   IoUringDecoderImpl(RowSchema schema, Storage* storage)
       : storage_(storage), schema_(std::move(schema)), scratch_offsets_(kIoUringDepth) {
+    util::Tracer::RegisterCategory(util::tracecat::kRowDecoderDecode,
+                                   "RowDecoder::Decode");
     scratch_space_.reserve(kIoUringDepth);
     for (int i = 0; i < kIoUringDepth; i++) {
       scratch_space_.push_back(util::AllocateAligned(schema.fixed_length, 512));
@@ -834,6 +852,8 @@ class IoUringDecoderImpl : public RowDecoder {
   }
 
   Status Load(std::span<int64_t> indices, Batch* out) override {
+    auto trace_scope =
+        util::Tracer::GetCurrent()->ScopeActivity(util::tracecat::kRowDecoderDecode);
     DCHECK(file_source_.has_value()) << "Call to Load without Initialize";
     IoUringSource src(
         file_source_->file_descriptor(),  // NOLINT(bugprone-unchecked-optional-access)

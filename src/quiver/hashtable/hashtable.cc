@@ -6,6 +6,7 @@
 #include "quiver/core/array.h"
 #include "quiver/util/literals.h"
 #include "quiver/util/logging_p.h"
+#include "quiver/util/tracing.h"
 
 namespace quiver::hashtable {
 
@@ -17,10 +18,15 @@ struct IdentityHash {
 
 class StlHashTable : public HashTable {
  public:
-  StlHashTable() : map_(kInitialBucketCount) {}
+  StlHashTable() : map_(kInitialBucketCount) {
+    util::Tracer::RegisterCategory(util::tracecat::kHashTableEncode, "HashTable::Encode");
+    util::Tracer::RegisterCategory(util::tracecat::kHashTableDecode, "HashTable::Decode");
+  }
 
   void Encode(std::span<const int64_t> hashes,
               std::span<const int64_t> row_ids) override {
+    auto trace_scope =
+        util::Tracer::GetCurrent()->ScopeActivity(util::tracecat::kHashTableEncode);
     DCHECK_EQ(hashes.size(), row_ids.size());
     auto hash_itr = hashes.begin();
     auto row_id_itr = row_ids.begin();
@@ -34,6 +40,8 @@ class StlHashTable : public HashTable {
   bool Decode(std::span<const int64_t> hashes, std::span<int32_t> hash_idx_out,
               std::span<int64_t> row_ids_out, int64_t* length_out,
               int64_t* hash_idx_offset, int64_t* bucket_idx_offset) override {
+    auto trace_scope =
+        util::Tracer::GetCurrent()->ScopeActivity(util::tracecat::kHashTableDecode);
     DCHECK(!row_ids_out.empty());
     DCHECK_NE(hash_idx_offset, nullptr);
     DCHECK_NE(bucket_idx_offset, nullptr);

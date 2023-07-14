@@ -13,6 +13,7 @@
 #include "quiver/util/arrow_util.h"
 #include "quiver/util/literals.h"
 #include "quiver/util/status.h"
+#include "quiver/util/tracing.h"
 #include "quiver/util/uri.h"
 
 using namespace quiver::util::literals;
@@ -110,12 +111,20 @@ quiver::util::Uri UriFromPython(const std::string& scheme, const std::string& pa
   return quiver::util::Uri{scheme, path, std::move(query_params)};
 }
 
+quiver::util::TracerScope TraceOperation() {
+  quiver::util::Tracer::SetCurrent(quiver::util::Tracer::Singleton());
+  return quiver::util::Tracer::GetCurrent()->StartOperation(
+      quiver::util::tracecat::kPythonBindings);
+}
+
 class CHashMap {
  public:
   CHashMap(const pybind11::handle& key_schema,
            const pybind11::handle& build_payload_schema,
            const pybind11::handle& probe_payload_schema, const std::string& sd_scheme,
            const std::string& sd_path, const pybind11::dict& sd_query) {
+    quiver::util::Tracer::RegisterCategory(quiver::util::tracecat::kPythonBindings,
+                                           "PythonBindings");
     ThrowNotOk(SchemaFromPyarrow(key_schema, &key_schema_));
     ThrowNotOk(SchemaFromPyarrow(build_payload_schema, &build_payload_schema_));
     ThrowNotOk(SchemaFromPyarrow(probe_payload_schema, &probe_payload_schema_));
@@ -146,6 +155,7 @@ class CHashMap {
   }
 
   void Insert(const pybind11::handle& batch) {
+    auto op_scope = TraceOperation();
     std::vector<std::unique_ptr<quiver::ReadOnlyBatch>> q_batches;
     ThrowNotOk(BatchesFromPyarrow(batch, &build_schema_, &q_batches));
     for (const auto& q_batch : q_batches) {
@@ -154,6 +164,7 @@ class CHashMap {
   }
 
   pybind11::object Lookup(const pybind11::handle& probe_keys_batch) {
+    auto op_scope = TraceOperation();
     std::unique_ptr<quiver::ReadOnlyBatch> q_probe_keys_batch;
     ThrowNotOk(BatchFromPyarrow(probe_keys_batch, &key_schema_, &q_probe_keys_batch));
     std::unique_ptr<quiver::Batch> q_result_batch =
@@ -164,6 +175,7 @@ class CHashMap {
 
   void InnerJoin(const pybind11::handle& batch, const pybind11::function& consume,
                  int32_t rows_per_batch) {
+    auto op_scope = TraceOperation();
     std::vector<std::unique_ptr<quiver::ReadOnlyBatch>> q_batches;
     ThrowNotOk(BatchesFromPyarrow(batch, &probe_schema_, &q_batches));
 
@@ -206,6 +218,8 @@ class CAccumulator {
   CAccumulator(const pybind11::handle& schema, int32_t rows_per_batch,
                pybind11::function callback)
       : callback_(std::move(callback)) {
+    quiver::util::Tracer::RegisterCategory(quiver::util::tracecat::kPythonBindings,
+                                           "PythonBindings");
     ThrowNotOk(SchemaFromPyarrow(schema, &schema_));
     auto q_callback = [this](std::unique_ptr<quiver::ReadOnlyBatch> q_batch) {
       pybind11::object batch = BatchToPyarrow(std::move(*q_batch));
@@ -217,6 +231,7 @@ class CAccumulator {
   }
 
   void Insert(const pybind11::handle& batch) {
+    auto op_scope = TraceOperation();
     std::vector<std::unique_ptr<quiver::ReadOnlyBatch>> q_batches;
     ThrowNotOk(BatchesFromPyarrow(batch, &schema_, &q_batches));
     for (const auto& q_batch : q_batches) {
@@ -224,7 +239,10 @@ class CAccumulator {
     }
   }
 
-  void Finish() { ThrowNotOk(accumulator_->Finish()); }
+  void Finish() {
+    auto op_scope = TraceOperation();
+    ThrowNotOk(accumulator_->Finish());
+  }
 
  private:
   quiver::SimpleSchema schema_;
@@ -232,10 +250,28 @@ class CAccumulator {
   pybind11::function callback_;
 };
 
+void ClearTracing() {
+  quiver::util::Tracer::SetCurrent(quiver::util::Tracer::Singleton());
+  quiver::util::Tracer::GetCurrent()->Clear();
+}
+
+void PrintTracing() {
+  quiver::util::Tracer::SetCurrent(quiver::util::Tracer::Singleton());
+  quiver::util::Tracer::GetCurrent()->Print();
+}
+
+void PrintTracingHistogram(int32_t width) {
+  quiver::util::Tracer::SetCurrent(quiver::util::Tracer::Singleton());
+  quiver::util::Tracer::GetCurrent()->PrintHistogram(width);
+}
+
 PYBIND11_MODULE(_quiver, mod) {
   // Clang format will mess up the formatting of the docstrings and so we disable it
   // clang-format off
   mod.doc() = "A set of unique collections for Arrow data";
+  mod.def("_clear_tracing", ClearTracing, "Clears the tracing data");
+  mod.def("_print_tracing", PrintTracing, "Prints the tracing data to stdout");
+  mod.def("_print_tracing_histogram", PrintTracingHistogram, "Prints the tracing data, as a histogram, to stdout", pybind11::arg("width") = 40);
   pybind11::class_<CHashMap>(mod, "CHashMap")
       .def(pybind11::init<const pybind11::handle&, const pybind11::handle&, const pybind11::handle&, const std::string&, const std::string&, const pybind11::dict&>(), R"(
         Creates a HashMap with the given schemas

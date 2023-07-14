@@ -7,6 +7,7 @@
 #include "quiver/core/array.h"
 #include "quiver/util/bit_util.h"
 #include "quiver/util/bitmap_ops.h"
+#include "quiver/util/tracing.h"
 
 namespace quiver::accum {
 
@@ -106,6 +107,10 @@ class FixedMemoryAccumulator : public Accumulator {
   FixedMemoryAccumulator(const SimpleSchema* schema, int32_t rows_per_batch,
                          std::function<Status(std::unique_ptr<ReadOnlyBatch>)> emit)
       : schema_(schema), rows_per_batch_(rows_per_batch), emit_(std::move(emit)) {
+    util::Tracer::RegisterCategory(util::tracecat::kAccumulatorInsert,
+                                   "Accumulator::Insert");
+    util::Tracer::RegisterCategory(util::tracecat::kAccumulatorFinish,
+                                   "Accumulator::Finish");
     DCHECK_LE(rows_per_batch_, static_cast<int64_t>(std::numeric_limits<int32_t>::max()));
     column_accumulators_.reserve(schema->num_fields());
     for (int i = 0; i < schema->num_fields(); i++) {
@@ -135,6 +140,8 @@ class FixedMemoryAccumulator : public Accumulator {
   Status InsertBatch(ReadOnlyBatch* batch) override { return InsertRange(batch); }
   Status InsertRange(ReadOnlyBatch* batch, int64_t row_start = 0,
                      int64_t length = -1) override {
+    auto trace_scope =
+        util::Tracer::GetCurrent()->ScopeActivity(util::tracecat::kAccumulatorInsert);
     int64_t offset = row_start;
     int64_t remaining = (length < 0) ? batch->length() - row_start : length;
     while (remaining > 0) {
@@ -160,6 +167,8 @@ class FixedMemoryAccumulator : public Accumulator {
 
   template <typename IndexType>
   Status InsertIndexedHelper(ReadOnlyBatch* batch, std::span<const IndexType> indices) {
+    auto trace_scope =
+        util::Tracer::GetCurrent()->ScopeActivity(util::tracecat::kAccumulatorInsert);
     int64_t offset = 0;
     auto remaining = static_cast<int64_t>(indices.size());
     while (remaining > 0) {
@@ -193,6 +202,8 @@ class FixedMemoryAccumulator : public Accumulator {
   }
 
   Status Finish() override {
+    auto trace_scope =
+        util::Tracer::GetCurrent()->ScopeActivity(util::tracecat::kAccumulatorFinish);
     if (current_batch_ && index_in_batch_ > 0) {
       current_batch_->SetLength(index_in_batch_);
       for (int i = 0; i < schema_->num_fields(); i++) {

@@ -3,13 +3,21 @@
 #include <cstring>
 
 #include "quiver/util/logging_p.h"
+#include "quiver/util/tracing.h"
 
 namespace quiver::map {
 
 class SimpleBinaryEqualityComparer : public EqualityComparer {
  public:
+  SimpleBinaryEqualityComparer() {
+    util::Tracer::RegisterCategory(util::tracecat::kEqualityCompare,
+                                   "SimpleBinaryEqualityComparer::CompareEquality");
+  }
+
   Status CompareEquality(ReadOnlyArray lhs, ReadOnlyArray rhs,
                          std::span<uint8_t> out) const override {
+    auto trace_scope =
+        util::Tracer::GetCurrent()->ScopeActivity(util::tracecat::kEqualityCompare);
     if (array::ArrayLayout(lhs) != array::ArrayLayout(rhs)) {
       AllFalse(out);
       return Status::OK();

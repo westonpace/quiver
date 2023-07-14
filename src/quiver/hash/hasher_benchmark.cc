@@ -2,6 +2,7 @@
 
 #include <memory>
 
+#include "quiver/benchutil/main.h"
 #include "quiver/datagen/datagen.h"
 #include "quiver/hash/hasher.h"
 #include "quiver/util/literals.h"
@@ -41,4 +42,4 @@ void BM_HashRows(benchmark::State& state) {
 
 // Register the function as a benchmark
 BENCHMARK(quiver::BM_HashRows);
-BENCHMARK_MAIN();
+QUIVER_BENCHMARK_MAIN();

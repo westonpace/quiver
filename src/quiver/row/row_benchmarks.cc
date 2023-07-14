@@ -10,6 +10,7 @@
 #include <numeric>
 
 #include "quiver/benchutil/datagen.h"
+#include "quiver/benchutil/main.h"
 #include "quiver/core/array.h"
 #include "quiver/core/arrow.h"
 #include "quiver/core/io.h"
@@ -27,7 +28,13 @@ namespace quiver {
 using namespace util::literals;
 namespace {
 
-constexpr int32_t kNumBytes = 64_Mi;
+#ifdef NDEBUG
+constexpr int64_t kTotalSizeBytes = 64_MiLL;
+#else
+constexpr int64_t kTotalSizeBytes = 1_MiLL;
+#endif
+constexpr int32_t kMinFieldWidth = 1;
+constexpr int32_t kMaxFieldWidth = 8;
 
 struct TestData {
   SimpleSchema schema;
@@ -40,7 +47,7 @@ TestData CreateTestData() {
   const std::shared_ptr<ArrowSchema>& batch_schema = bench::GetFlatDataSchema();
   SimpleSchema::ImportFromArrow(batch_schema.get(), &test_data.schema).AbortNotOk();
 
-  util::OwnedArrowArray random_batch = bench::GenFlatData(kNumBytes);
+  util::OwnedArrowArray random_batch = bench::GenFlatData(kTotalSizeBytes);
   ImportBatch(random_batch.release(), &test_data.schema, &test_data.batch).AbortNotOk();
 
   return test_data;
@@ -54,7 +61,7 @@ const TestData& GetTestData() {
 void DoSetup(const benchmark::State& _state) { GetTestData(); }
 
 void BM_EncodeRows(benchmark::State& state) {
-  std::unique_ptr<Storage> storage = TestStorage(kNumBytes);
+  std::unique_ptr<Storage> storage = TestStorage(kTotalSizeBytes);
 
   const TestData& test_data = GetTestData();
 
@@ -65,7 +72,7 @@ void BM_EncodeRows(benchmark::State& state) {
     int64_t row_id = -1;
     encoder->Append(*test_data.batch, &row_id).AbortNotOk();
   }
-  state.SetBytesProcessed(int64_t(state.iterations()) * int64_t(kNumBytes));
+  state.SetBytesProcessed(int64_t(state.iterations()) * int64_t(kTotalSizeBytes));
 }
 
 void BenchDecodeMemory(const datagen::GeneratedData& data, benchmark::State& state,
@@ -185,10 +192,6 @@ void BenchDecodeIoUring(const datagen::GeneratedData& data, benchmark::State& st
 }
 
 void BM_DecodeRowsMemory(benchmark::State& state) {
-  constexpr int64_t kTotalSizeBytes = 64_MiLL;
-  constexpr int32_t kMinFieldWidth = 1;
-  constexpr int32_t kMaxFieldWidth = 8;
-
   auto row_width_bytes = static_cast<int32_t>(state.range(0));
   auto num_rows = kTotalSizeBytes / row_width_bytes;
 
@@ -202,8 +205,6 @@ void BM_DecodeRowsMemory(benchmark::State& state) {
 }
 
 void BM_DecodeRowsMemoryOneWideField(benchmark::State& state) {
-  constexpr int64_t kTotalSizeBytes = 64_MiLL;
-
   auto row_width_bytes = static_cast<int32_t>(state.range(0));
   auto num_rows = kTotalSizeBytes / row_width_bytes;
 
@@ -215,10 +216,6 @@ void BM_DecodeRowsMemoryOneWideField(benchmark::State& state) {
 }
 
 void BM_DecodeRowsMemoryStaged(benchmark::State& state) {
-  constexpr int64_t kTotalSizeBytes = 64_MiLL;
-  constexpr int32_t kMinFieldWidth = 1;
-  constexpr int32_t kMaxFieldWidth = 8;
-
   auto row_width_bytes = static_cast<int32_t>(state.range(0));
   auto num_rows = kTotalSizeBytes / row_width_bytes;
 
@@ -232,10 +229,6 @@ void BM_DecodeRowsMemoryStaged(benchmark::State& state) {
 }
 
 void BM_DecodeRowsFile(benchmark::State& state) {
-  constexpr int64_t kTotalSizeBytes = 64_MiLL;
-  constexpr int32_t kMinFieldWidth = 1;
-  constexpr int32_t kMaxFieldWidth = 8;
-
   auto row_width_bytes = static_cast<int32_t>(state.range(0));
   auto num_rows = kTotalSizeBytes / row_width_bytes;
 
@@ -249,10 +242,6 @@ void BM_DecodeRowsFile(benchmark::State& state) {
 }
 
 void BM_DecodeRowsFileStaged(benchmark::State& state) {
-  constexpr int64_t kTotalSizeBytes = 64_MiLL;
-  constexpr int32_t kMinFieldWidth = 1;
-  constexpr int32_t kMaxFieldWidth = 8;
-
   auto row_width_bytes = static_cast<int32_t>(state.range(0));
   auto num_rows = kTotalSizeBytes / row_width_bytes;
 
@@ -266,8 +255,6 @@ void BM_DecodeRowsFileStaged(benchmark::State& state) {
 }
 
 void BM_DecodeRowsFileOneWideField(benchmark::State& state) {
-  constexpr int64_t kTotalSizeBytes = 64_MiLL;
-
   auto row_width_bytes = static_cast<int32_t>(state.range(0));
   auto num_rows = kTotalSizeBytes / row_width_bytes;
 
@@ -279,8 +266,6 @@ void BM_DecodeRowsFileOneWideField(benchmark::State& state) {
 }
 
 void BM_DecodeRowsIoUring(benchmark::State& state) {
-  constexpr int64_t kTotalSizeBytes = 64_MiLL;
-
   auto row_width_bytes = static_cast<int32_t>(state.range(0));
   auto num_rows = kTotalSizeBytes / row_width_bytes;
 
@@ -346,4 +331,4 @@ BENCHMARK(quiver::BM_DecodeRowsFileOneWideField)
     ->Arg(2048)
     ->Arg(4096)
     ->Arg(16384);
-BENCHMARK_MAIN();
+QUIVER_BENCHMARK_MAIN();

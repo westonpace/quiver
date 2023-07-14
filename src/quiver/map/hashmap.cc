@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <numeric>
+#include <thread>
 
 #include "quiver/accumulator/accumulator.h"
 #include "quiver/core/array.h"
@@ -10,6 +11,7 @@
 #include "quiver/row/row_p.h"
 #include "quiver/util/bit_util.h"
 #include "quiver/util/local_allocator_p.h"
+#include "quiver/util/tracing.h"
 
 namespace quiver::map {
 
@@ -66,6 +68,10 @@ class HashMapImpl : public HashMap {
         joined_schema_(),
         hasher_(std::move(hasher)),
         hashtable_(std::move(hashtable)) {
+    util::Tracer::RegisterCategory(util::tracecat::kHashMapInsert, "HashMapImpl::Insert");
+    util::Tracer::RegisterCategory(util::tracecat::kHashMapLookup, "HashMapImpl::Lookup");
+    util::Tracer::RegisterCategory(util::tracecat::kHashMapInnerJoin,
+                                   "HashMapImpl::InnerJoin");
     if (probe_payload_schema_ != nullptr) {
       probe_schema_ = SimpleSchema::AllColumnsFrom(*key_schema_, *probe_payload_schema_);
       joined_schema_ =
@@ -83,6 +89,8 @@ class HashMapImpl : public HashMap {
   }
 
   Status Insert(ReadOnlyBatch* keys, ReadOnlyBatch* payload) override {
+    auto trace_scope =
+        util::Tracer::GetCurrent()->ScopeActivity(util::tracecat::kHashMapInsert);
     util::local_ptr<std::span<int64_t>> hashes =
         local_alloc_.AllocateSpan<int64_t>(keys->length());
     QUIVER_RETURN_NOT_OK(hasher_->HashBatch(keys, *hashes));
@@ -103,6 +111,8 @@ class HashMapImpl : public HashMap {
   }
 
   Status InsertCombinedBatch(ReadOnlyBatch* batch) override {
+    auto trace_scope =
+        util::Tracer::GetCurrent()->ScopeActivity(util::tracecat::kHashMapInsert);
     std::vector<int32_t> key_indices(key_schema_->num_fields());
     std::iota(key_indices.begin(), key_indices.end(), 0);
     std::unique_ptr<ReadOnlyBatch> keys =
@@ -124,6 +134,8 @@ class HashMapImpl : public HashMap {
   }
 
   Status Lookup(ReadOnlyBatch* keys, Batch* out) override {
+    auto trace_scope =
+        util::Tracer::GetCurrent()->ScopeActivity(util::tracecat::kHashMapLookup);
     util::local_ptr<std::span<int64_t>> hashes =
         local_alloc_.AllocateSpan<int64_t>(keys->length());
     QUIVER_RETURN_NOT_OK(hasher_->HashBatch(keys, *hashes));
@@ -179,6 +191,8 @@ class HashMapImpl : public HashMap {
   Status InnerJoin(
       ReadOnlyBatch* keys, ReadOnlyBatch* payload, int32_t rows_per_batch,
       std::function<Status(std::unique_ptr<ReadOnlyBatch>)> consumer) override {
+    auto trace_scope =
+        util::Tracer::GetCurrent()->ScopeActivity(util::tracecat::kHashMapInnerJoin);
     if (probe_payload_schema_ == nullptr) {
       return Status::Invalid(
           "Probe schema was not provided at construction.  InnerJoin cannot be used.");
@@ -198,13 +212,6 @@ class HashMapImpl : public HashMap {
     std::cout << "Given row width of " << row_width_bytes_ << " we are using batches of "
               << rows_per_batch << std::endl;
 
-    // Somewhat arbitrary but we do have to be larger than 2048 to ensure
-    // the combined accumulator is at least 2 mini batches large. We could improve
-    // if needed
-    if (rows_per_batch < 2_KiLL) {
-      return Status::Invalid("rows_per_batch must be >= 16Ki");
-    }
-
     constexpr int64_t kMiniBatchSize = 1024;
 
     std::unique_ptr<Batch> scratch = Batch::CreateBasic(&build_schema_);
@@ -222,6 +229,7 @@ class HashMapImpl : public HashMap {
       all_found = hashtable_->Decode(*hashes, *in_row_ids, *out_row_ids, &length_out,
                                      &hash_offset, &bucket_offset);
 
+      std::cout << hash_offset << " " << bucket_offset << " " << length_out << std::endl;
       std::span<int64_t> key_row_ids = out_row_ids->subspan(0, length_out);
       QUIVER_RETURN_NOT_OK(row_decoder_->Load(key_row_ids, scratch.get()));
       QUIVER_RETURN_NOT_OK(accumulator.build->InsertRange(scratch.get()));

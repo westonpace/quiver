@@ -5,6 +5,7 @@
 #include <numeric>
 #include <random>
 
+#include "quiver/benchutil/main.h"
 #include "quiver/datagen/datagen.h"
 #include "quiver/map/equality.h"
 #include "quiver/util/bit_util.h"
@@ -81,4 +82,4 @@ BENCHMARK(quiver::map::BM_EqualityUnequals)
     ->Arg(1)
     ->Arg(4)
     ->Arg(8);
-BENCHMARK_MAIN();
+QUIVER_BENCHMARK_MAIN();

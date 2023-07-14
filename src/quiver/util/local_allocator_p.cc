@@ -1,6 +1,7 @@
 #include "quiver/util/local_allocator_p.h"
 
 #include <cstdint>
+#include <iostream>
 
 #include "quiver/util/bit_util.h"
 
@@ -38,6 +39,7 @@ uint8_t* LocalAllocator::AllocateBuffer(int64_t size_bytes) {
     // pointers Instead we enter "on-demand mode" and allocate a new chunk for every
     // request.  Once the local allocator is idle again we can resize.
     allocations_performed_++;
+    std::cout << "Immediate alloc of: " << size_bytes << std::endl;
     chunks_.emplace_back(size_bytes);
     return chunks_.back().data();
   }
@@ -57,6 +59,7 @@ void LocalAllocator::Free(int32_t allocation_id, int64_t size) {
     if (desired_allocated_bytes_ >= 0) {
       int64_t new_size = bit_util::RoundUp(desired_allocated_bytes_, chunk_size_);
       allocations_performed_++;
+      std::cout << "Resize to: " << new_size << std::endl;
       data_.resize(new_size);
       desired_allocated_bytes_ = -1;
     }

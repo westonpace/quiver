@@ -75,6 +75,7 @@ add_library(
   src/quiver/util/random.cc
   src/quiver/util/status.cc
   src/quiver/util/string_builder.cc
+  src/quiver/util/tracing.cc
   src/quiver/util/uri.cc)
 
 set_target_properties(quiver_static PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -110,7 +111,7 @@ if(QUIVER_BUILD_TESTS)
   add_library(
     quiver_testutil OBJECT
     src/quiver/testutil/test_util.cc src/quiver/testutil/gen.cc
-    src/quiver/testutil/tmpfiles.cc)
+    src/quiver/testutil/tmpfiles.cc src/quiver/testutil/main.cc)
   target_include_directories(quiver_testutil
                              PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(quiver_testutil PRIVATE Arrow::arrow_shared)
@@ -132,7 +133,7 @@ function(add_test TEST_NAME)
     add_executable(${TEST_NAME} ${ARG_SOURCES})
     target_link_libraries(
       ${TEST_NAME} PRIVATE quiver_static quiver_testutil Arrow::arrow_shared
-                           GTest::gmock GTest::gtest_main)
+                           GTest::gmock)
     gtest_discover_tests(${TEST_NAME})
   endif()
 endfunction()

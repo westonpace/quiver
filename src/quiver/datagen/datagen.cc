@@ -28,6 +28,7 @@ class FlatFieldGeneratorImpl : public FieldGenerator {
     batch->ResizeBufferBytes(field_idx, 0, num_validity_bytes);
     batch->ResizeBufferBytes(field_idx, 1, num_value_bytes);
     FlatArray flat_arr = std::get<FlatArray>(batch->mutable_array(field_idx));
+    bit_util::SetBitmap(flat_arr.validity.data(), 0, flat_arr.length);
     util::RandomBytes(flat_arr.values);
   }
 
