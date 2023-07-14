@@ -16,7 +16,7 @@ function repair_wheel {
 
 # Compile wheels
 for PYBIN in /opt/python/cp310-cp310/bin /opt/python/cp311-cp311/bin; do
-    "${PYBIN}/pip" wheel quiver --no-deps -w quiver/wheelhouse/
+    "${PYBIN}/pip" wheel ./quiver --no-deps -w quiver/wheelhouse/
 done
 
 # Bundle external shared libraries into the wheels
