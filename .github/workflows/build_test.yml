@@ -9,6 +9,8 @@ jobs:
   buildtest:
     name: Build wheels and test install
     runs-on: ubuntu-latest
+    container:
+      image: quay.io/pypa/manylinux_2_28_x86_64
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -16,10 +18,7 @@ jobs:
           submodules: recursive
 
       - name: Build & run
-        run: docker run -v ${{ github.workspace }}/wheelhouse:/quiver/wheelhouse --rm $(docker build -q --file ./ci/wheels/manylinux/2_28-x86_64.Dockerfile .)
-
-      - name: Debug files
-        run: find ${{ github.workspace }}
+        run: ci/wheels/manylinux/build.sh
 
       - uses: actions/upload-artifact@v3
         with:
