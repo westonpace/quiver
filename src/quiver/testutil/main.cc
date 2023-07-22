@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "quiver/util/config.h"
 #include "quiver/util/tracing.h"
 
 class QuiverEnvironment : public ::testing::Environment {
@@ -7,6 +8,7 @@ class QuiverEnvironment : public ::testing::Environment {
   ~QuiverEnvironment() override = default;
 
   void SetUp() override {
+    quiver::util::config::SetLogLevel(quiver::util::config::LogLevel::kTrace);
     quiver::util::Tracer::RegisterCategory(quiver::util::tracecat::kUnitTest, "UnitTest");
     quiver::util::Tracer::SetCurrent(quiver::util::Tracer::Singleton());
     op_scope = quiver::util::Tracer::GetCurrent()->StartOperation(

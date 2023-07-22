@@ -2,6 +2,8 @@
 
 #pragma once
 
+#include <fmt/core.h>
+
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -99,6 +101,77 @@ class StreamSink {
   std::function<uint8_t*(uint8_t*, int32_t, int32_t*)> swap_;
 };
 
+class RandomAccessSink;
+class SinkBuffer {
+ public:
+  SinkBuffer() = default;
+  SinkBuffer(std::span<uint8_t> buf, int64_t offset, RandomAccessSink* sink)
+      : buf_(buf),
+        offset_(offset),
+        itr_(buf.data()),
+        remaining_(static_cast<int64_t>(buf_.size())),
+        sink_(sink) {}
+  SinkBuffer(const SinkBuffer&) = delete;
+  SinkBuffer& operator=(const SinkBuffer&) = delete;
+  SinkBuffer(SinkBuffer&&) noexcept;
+  SinkBuffer& operator=(SinkBuffer&&) noexcept;
+
+  ~SinkBuffer() noexcept;
+
+#ifndef NDEBUG
+  void UpdateRemaining(int64_t len);
+#endif
+
+  void CopyInto(const uint8_t* src, int32_t len) {
+#ifndef NDEBUG
+    UpdateRemaining(static_cast<int64_t>(len));
+#endif
+    std::memcpy(itr_, src, len);
+    itr_ += len;
+  }
+
+  void CopyInto(uint8_t byte) {
+#ifndef NDEBUG
+    UpdateRemaining(1UL);
+#endif
+    *itr_ = byte;
+    itr_++;
+  }
+
+  void FillZero(int32_t len) {
+#ifndef NDEBUG
+    UpdateRemaining(static_cast<int64_t>(len));
+#endif
+    std::memset(itr_, 0, len);
+    itr_ += len;
+  }
+
+  [[nodiscard]] std::span<uint8_t> buf() const { return buf_; }
+  [[nodiscard]] int64_t offset() const { return offset_; }
+
+ private:
+  std::span<uint8_t> buf_;
+  int64_t offset_ = 0;
+  uint8_t* itr_ = nullptr;
+  int64_t remaining_ = 0;
+  RandomAccessSink* sink_ = nullptr;
+};
+
+class RandomAccessSink {
+ public:
+  virtual ~RandomAccessSink() = default;
+  virtual Status ReserveChunkAt(int64_t offset, int64_t len, SinkBuffer* out) = 0;
+  virtual Status Finish() = 0;
+  static std::unique_ptr<RandomAccessSink> FromBuffer(std::span<uint8_t> span);
+  static std::unique_ptr<RandomAccessSink> FromFileDescriptor(int file_descriptor);
+  static Status FromPath(std::string_view path, bool direct_io,
+                         std::unique_ptr<RandomAccessSink>* out);
+
+ private:
+  virtual void FinishSinkBuffer(SinkBuffer* sink_buffer) = 0;
+  friend SinkBuffer;
+};
+
 class BufferSource {
  public:
   explicit BufferSource(uint8_t* buf) : buf_(buf) {}
@@ -145,10 +218,12 @@ class RandomAccessSource {
 
 class Storage {
  public:
-  [[nodiscard]] virtual Status OpenRandomAccessSource(
-      std::unique_ptr<RandomAccessSource>* out) = 0;
-  [[nodiscard]] virtual Status OpenStreamSink(std::unique_ptr<StreamSink>* out) = 0;
+  virtual ~Storage() = default;
+  virtual Status OpenRandomAccessSource(std::unique_ptr<RandomAccessSource>* out) = 0;
+  virtual Status OpenStreamSink(std::unique_ptr<StreamSink>* out) = 0;
+  virtual Status OpenRandomAccessSink(std::unique_ptr<RandomAccessSink>* out) = 0;
   static Status FromSpecifier(const util::Uri& specifier, std::unique_ptr<Storage>* out);
+  virtual std::span<uint8_t> DebugBuffer() = 0;
 
   /// Return true if the storage requires reads and writes to operate on page-aligned
   /// buffers

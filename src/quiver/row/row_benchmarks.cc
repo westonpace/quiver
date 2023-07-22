@@ -60,8 +60,8 @@ const TestData& GetTestData() {
 
 void DoSetup(const benchmark::State& _state) { GetTestData(); }
 
-void BM_EncodeRows(benchmark::State& state) {
-  std::unique_ptr<Storage> storage = TestStorage(kTotalSizeBytes);
+void BM_EncodeMemory(benchmark::State& state) {
+  std::unique_ptr<Storage> storage = TestStorage(kTotalSizeBytes * 2);
 
   const TestData& test_data = GetTestData();
 
@@ -71,9 +71,26 @@ void BM_EncodeRows(benchmark::State& state) {
   for (auto _iter : state) {
     int64_t row_id = -1;
     encoder->Append(*test_data.batch, &row_id).AbortNotOk();
+    encoder->Reset().AbortNotOk();
   }
   state.SetBytesProcessed(int64_t(state.iterations()) * int64_t(kTotalSizeBytes));
 }
+
+// void BM_EncodeFile(benchmark::State& state) {
+//   std::unique_ptr<Storage> storage = TestStorage(kTotalSizeBytes);
+
+//   const TestData& test_data = GetTestData();
+
+//   std::unique_ptr<row::RowEncoder> encoder;
+//   row::RowEncoder::Create(&test_data.schema, storage.get(), false,
+//   &encoder).AbortNotOk();
+
+//   for (auto _iter : state) {
+//     int64_t row_id = -1;
+//     encoder->Append(*test_data.batch, &row_id).AbortNotOk();
+//   }
+//   state.SetBytesProcessed(int64_t(state.iterations()) * int64_t(kTotalSizeBytes));
+// }
 
 void BenchDecodeMemory(const datagen::GeneratedData& data, benchmark::State& state,
                        bool staged) {
@@ -172,7 +189,7 @@ void BenchDecodeIoUring(const datagen::GeneratedData& data, benchmark::State& st
 
   int64_t row_id;
   encoder->Append(*data.batch, &row_id).AbortNotOk();
-  encoder->Finish();
+  AssertOk(encoder->Finish());
 
   std::unique_ptr<row::RowDecoder> decoder;
   row::RowDecoder::CreateIoUring(data.schema.get(), storage.get(), &decoder).AbortNotOk();
@@ -281,7 +298,7 @@ void BM_DecodeRowsIoUring(benchmark::State& state) {
 }  // namespace quiver
 
 // Register the function as a benchmark
-BENCHMARK(quiver::BM_EncodeRows);
+BENCHMARK(quiver::BM_EncodeMemory);
 BENCHMARK(quiver::BM_DecodeRowsIoUring)
     ->ArgName("RowWidthBytes")
     ->Arg(4)

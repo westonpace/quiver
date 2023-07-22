@@ -8,6 +8,7 @@ namespace quiver::accum {
 
 class Accumulator {
  public:
+  virtual ~Accumulator() = default;
   /// Insert an entire batch into the accumulator
   virtual Status InsertBatch(ReadOnlyBatch* batch) = 0;
   /// Insert a continuous range of rows into the accumulator

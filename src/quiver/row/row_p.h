@@ -48,7 +48,8 @@ class RowEncoder {
   virtual Status Append(const ReadOnlyBatch& batch, int64_t* out_row_id) = 0;
   static Status Create(const SimpleSchema* schema, Storage* storage, bool direct_io,
                        std::unique_ptr<RowEncoder>* out);
-  virtual void Finish() = 0;
+  virtual Status Finish() = 0;
+  virtual Status Reset() = 0;
 };
 
 /// Retrieve and decode rows from a row-based storage

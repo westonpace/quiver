@@ -1,5 +1,6 @@
 #include <pybind11/pybind11.h>
 
+#include <iostream>
 #include <memory>
 #include <numeric>
 
@@ -11,6 +12,7 @@
 #include "quiver/hashtable/hashtable.h"
 #include "quiver/map/hashmap.h"
 #include "quiver/util/arrow_util.h"
+#include "quiver/util/config.h"
 #include "quiver/util/literals.h"
 #include "quiver/util/status.h"
 #include "quiver/util/tracing.h"
@@ -154,6 +156,8 @@ class CHashMap {
         storage_.get(), std::move(hashtable), &hashmap_));
   }
 
+  ~CHashMap() { std::cout << "Deleting hashmap" << std::endl; }
+
   void Insert(const pybind11::handle& batch) {
     auto op_scope = TraceOperation();
     std::vector<std::unique_ptr<quiver::ReadOnlyBatch>> q_batches;
@@ -265,10 +269,16 @@ void PrintTracingHistogram(int32_t width) {
   quiver::util::Tracer::GetCurrent()->PrintHistogram(width);
 }
 
+std::string Info() {
+  return std::string("quiver ") +
+         (quiver::util::config::IsDebug() ? " debug" : " release");
+}
+
 PYBIND11_MODULE(_quiver, mod) {
   // Clang format will mess up the formatting of the docstrings and so we disable it
   // clang-format off
   mod.doc() = "A set of unique collections for Arrow data";
+  mod.def("_info", Info, "Returns information about the Quiver library");
   mod.def("_clear_tracing", ClearTracing, "Clears the tracing data");
   mod.def("_print_tracing", PrintTracing, "Prints the tracing data to stdout");
   mod.def("_print_tracing_histogram", PrintTracingHistogram, "Prints the tracing data, as a histogram, to stdout", pybind11::arg("width") = 40);

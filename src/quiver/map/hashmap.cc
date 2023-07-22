@@ -209,8 +209,6 @@ class HashMapImpl : public HashMap {
         rows_per_batch = 2_KiLL;
       }
     }
-    std::cout << "Given row width of " << row_width_bytes_ << " we are using batches of "
-              << rows_per_batch << std::endl;
 
     constexpr int64_t kMiniBatchSize = 1024;
 
@@ -229,7 +227,6 @@ class HashMapImpl : public HashMap {
       all_found = hashtable_->Decode(*hashes, *in_row_ids, *out_row_ids, &length_out,
                                      &hash_offset, &bucket_offset);
 
-      std::cout << hash_offset << " " << bucket_offset << " " << length_out << std::endl;
       std::span<int64_t> key_row_ids = out_row_ids->subspan(0, length_out);
       QUIVER_RETURN_NOT_OK(row_decoder_->Load(key_row_ids, scratch.get()));
       QUIVER_RETURN_NOT_OK(accumulator.build->InsertRange(scratch.get()));

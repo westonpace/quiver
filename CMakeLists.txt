@@ -36,14 +36,15 @@ if(QUIVER_CODE_COVERAGE)
   include(CodeCoverage)
 endif()
 
-if(QUIVER_BUILD_TESTS)
+find_package(spdlog CONFIG REQUIRED)
+
+if(QUIVER_BUILD_TESTS OR QUIVER_BUILD_BENCHMARKS)
   find_package(GTest CONFIG REQUIRED)
   find_package(Arrow CONFIG REQUIRED)
   enable_testing()
 endif()
 
 if(QUIVER_BUILD_BENCHMARKS)
-  find_package(Arrow CONFIG REQUIRED)
   find_package(benchmark CONFIG REQUIRED)
 endif()
 
@@ -67,6 +68,7 @@ add_library(
   src/quiver/util/arrow_util.cc
   src/quiver/util/bitmap_ops.cc
   src/quiver/util/bit_util.cc
+  src/quiver/util/config.cc
   src/quiver/util/cpu_info.cc
   src/quiver/util/local_allocator_p.cc
   src/quiver/util/logging_p.cc
@@ -87,7 +89,9 @@ set_target_properties(quiver_static PROPERTIES PUBLIC_HEADER src/quiver/lib.h)
 target_precompile_headers(quiver_static PRIVATE src/quiver/pch.h)
 
 target_include_directories(quiver_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(quiver_static PRIVATE spdlog::spdlog)
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  target_compile_definitions(quiver_static PRIVATE SPDLOG_ACTIVE_LEVEL=TRACE)
   if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     target_compile_options(quiver_static PRIVATE -Wall -Werror -Wextra
                                                  -Wpedantic -Wunused-result)
@@ -101,13 +105,15 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   if(QUIVER_CODE_COVERAGE)
     append_coverage_compiler_flags_to_target(quiver_static)
   endif()
+else()
+  target_compile_definitions(quiver_static PRIVATE SPDLOG_ACTIVE_LEVEL=DEBUG)
 endif()
 
 if(QUIVER_PYTHON_BINDINGS)
   add_subdirectory(src/python)
 endif()
 
-if(QUIVER_BUILD_TESTS)
+if(QUIVER_BUILD_TESTS OR QUIVER_BUILD_BENCHMARKS)
   add_library(
     quiver_testutil OBJECT
     src/quiver/testutil/test_util.cc src/quiver/testutil/gen.cc
@@ -131,9 +137,10 @@ function(add_test TEST_NAME)
 
   if(QUIVER_BUILD_TESTS)
     add_executable(${TEST_NAME} ${ARG_SOURCES})
+    target_compile_definitions(quiver_static PRIVATE SPDLOG_ACTIVE_LEVEL=TRACE)
     target_link_libraries(
       ${TEST_NAME} PRIVATE quiver_static quiver_testutil Arrow::arrow_shared
-                           GTest::gmock)
+                           GTest::gmock spdlog::spdlog)
     gtest_discover_tests(${TEST_NAME})
   endif()
 endfunction()

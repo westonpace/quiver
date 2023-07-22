@@ -4,6 +4,7 @@
 #include <arrow/c/bridge.h>
 #include <arrow/record_batch.h>
 #include <gtest/gtest.h>
+#include <spdlog/spdlog.h>
 
 #include <iosfwd>
 
@@ -103,7 +104,7 @@ class RowEncodingTest : public ::testing::TestWithParam<RowCodecParams> {
     int64_t row_id = -1;
     AssertOk(encoder->Append(*data.batch, &row_id));
     DCHECK_EQ(row_id, 0);
-    encoder->Finish();
+    AssertOk(encoder->Finish());
 
     std::unique_ptr<RowDecoder> decoder = CreateDecoder(&data.schema);
 
@@ -134,7 +135,7 @@ TEST_P(RowEncodingTest, BasicRoundTrip) {
   int64_t row_id = -1;
   AssertOk(encoder->Append(*data.batch, &row_id));
   DCHECK_EQ(0, row_id);
-  encoder->Finish();
+  AssertOk(encoder->Finish());
 
   std::unique_ptr<RowDecoder> decoder = CreateDecoder(&data.schema);
 

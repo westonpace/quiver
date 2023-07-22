@@ -3,11 +3,13 @@
 #include "quiver/core/io.h"
 
 #include <fcntl.h>
+#include <spdlog/spdlog.h>
 
-#include <iostream>
+#include <deque>
 #include <limits>
 #include <span>
 #include <sstream>
+#include <vector>
 
 #include "quiver/core/array.h"
 #include "quiver/util/logging_p.h"
@@ -55,6 +57,138 @@ StreamSink StreamSink::FromPath(const std::string& path, bool direct_io, bool ap
     return buf.get();
   };
   return {aligned_buf, write_buffer_size, std::move(flush)};
+}
+
+SinkBuffer::SinkBuffer(SinkBuffer&& other) noexcept
+    : buf_(other.buf_),
+      offset_(other.offset_),
+      itr_(other.itr_),
+      remaining_(other.remaining_),
+      sink_(other.sink_) {
+  other.itr_ = nullptr;
+  other.sink_ = nullptr;
+  other.offset_ = -1;
+}
+
+SinkBuffer& SinkBuffer::operator=(SinkBuffer&& other) noexcept {
+  buf_ = other.buf_;
+  offset_ = other.offset_;
+  itr_ = other.itr_;
+  remaining_ = other.remaining_;
+  sink_ = other.sink_;
+  other.itr_ = nullptr;
+  other.sink_ = nullptr;
+  other.offset_ = -1;
+  return *this;
+}
+
+SinkBuffer::~SinkBuffer() noexcept {
+  if (sink_ != nullptr) {
+    sink_->FinishSinkBuffer(this);
+  }
+}
+
+#ifndef NDEBUG
+void SinkBuffer::UpdateRemaining(int64_t len) {
+  remaining_ -= len;
+  DCHECK_GE(remaining_, 0) << "Attempt to write past the end of a sink buffer";
+}
+#endif
+
+class RamSink : public RandomAccessSink {
+ public:
+  RamSink(std::span<uint8_t> data) : data_(data) {}
+  Status ReserveChunkAt(int64_t offset, int64_t len, SinkBuffer* out) override {
+    DCHECK_GE(offset, 0);
+    DCHECK_GT(len, 0);
+    if (offset + len > static_cast<int64_t>(data_.size())) {
+      return Status::Invalid("Attempted to write past end of RAM sink");
+    }
+    *out = SinkBuffer({data_.data() + offset, static_cast<uint64_t>(len)}, offset, this);
+    return Status::OK();
+  }
+  Status Finish() override { return Status::OK(); }
+
+ private:
+  void FinishSinkBuffer(SinkBuffer* /*sink_buffer*/) override {}
+  std::span<uint8_t> data_;
+};
+
+std::unique_ptr<RandomAccessSink> RandomAccessSink::FromBuffer(std::span<uint8_t> span) {
+  return std::make_unique<RamSink>(span);
+}
+
+class FileSink : public RandomAccessSink {
+ public:
+  FileSink(int file_descriptor) : file_descriptor_(file_descriptor) {}
+
+  Status ReserveChunkAt(int64_t offset, int64_t len, SinkBuffer* out) override {
+    if (!last_error_.ok()) {
+      return last_error_;
+    }
+    DCHECK_GE(offset, 0);
+    DCHECK_GT(len, 0);
+    std::vector<uint8_t> page(len);
+    std::vector<uint8_t>* page_ref;
+    {
+      std::lock_guard lock(mutex_);
+      auto inserted = pages_.insert({offset, std::move(page)});
+      if (!inserted.second) {
+        return Status::Invalid("Multiple FileSink writes to offset ", offset);
+      }
+      page_ref = &(inserted.first->second);
+    }
+    *out = {std::span<uint8_t>(*page_ref), offset, this};
+    return Status::OK();
+  }
+
+  Status Finish() override {
+    if (!pages_.empty()) {
+      return Status::UnknownError(
+          "Finish called on FileSink but some pages still existed");
+    }
+    return last_error_;
+  }
+
+ private:
+  void FinishSinkBuffer(SinkBuffer* sink_buffer) override {
+    uint64_t written = pwrite64(file_descriptor_, sink_buffer->buf().data(),
+                                sink_buffer->buf().size(), sink_buffer->offset());
+    if (written != sink_buffer->buf().size()) {
+      last_error_ = Status::IOError(
+          "Received " + std::to_string(written) + " from pwrite64 and expected " +
+          std::to_string(sink_buffer->buf().size()) + strerror(errno));
+    }
+
+    std::lock_guard lock(mutex_);
+    pages_.erase(sink_buffer->offset());
+  }
+
+  std::unordered_map<int64_t, std::vector<uint8_t>> pages_;
+  std::mutex mutex_;
+
+  int file_descriptor_;
+  Status last_error_;
+};
+
+std::unique_ptr<RandomAccessSink> RandomAccessSink::FromFileDescriptor(
+    int file_descriptor) {
+  return std::make_unique<FileSink>(file_descriptor);
+}
+
+Status RandomAccessSink::FromPath(std::string_view path, bool direct_io,
+                                  std::unique_ptr<RandomAccessSink>* out) {
+  int flags = O_WRONLY | O_CREAT;
+  if (direct_io) {
+    flags |= O_DIRECT;
+  }
+  flags |= O_TRUNC;
+  int file_descriptor = open(path.data(), flags, 0644);
+  if (file_descriptor < 0) {
+    return Status::IOError("Could not open file sink at ", path, ": ", strerror(errno));
+  }
+  *out = std::make_unique<FileSink>(file_descriptor);
+  return Status::OK();
 }
 
 class SpanSource : public RandomAccessSource {
@@ -117,7 +251,12 @@ std::unique_ptr<RandomAccessSource> RandomAccessSource::FromPath(std::string_vie
 
 class RamStorage : public Storage {
  public:
-  RamStorage(int64_t size_bytes) : data_(size_bytes) {}
+  RamStorage(int64_t size_bytes) : data_(size_bytes) {
+    spdlog::debug("Allocated {} bytes of RAM storage", size_bytes);
+  }
+  ~RamStorage() override {
+    spdlog::debug("Released {} bytes of RAM storage", data_.size());
+  }
   Status OpenRandomAccessSource(std::unique_ptr<RandomAccessSource>* out) override {
     *out = RandomAccessSource::FromSpan(std::span<uint8_t>(data_));
     return Status::OK();
@@ -128,6 +267,13 @@ class RamStorage : public Storage {
         StreamSink::FromFixedSizeSpan(std::span<uint8_t>(data_)));
     return Status::OK();
   }
+
+  Status OpenRandomAccessSink(std::unique_ptr<RandomAccessSink>* out) override {
+    *out = RandomAccessSink::FromBuffer(std::span<uint8_t>(data_));
+    return Status::OK();
+  }
+
+  std::span<uint8_t> DebugBuffer() override { return data_; }
 
   [[nodiscard]] bool requires_alignment() const override { return false; }
   // TODO(#3) return actual value
@@ -152,6 +298,12 @@ class FileStorage : public Storage {
         StreamSink::FromPath(path_, direct_io_, /*append=*/false));
     return Status::OK();
   }
+
+  Status OpenRandomAccessSink(std::unique_ptr<RandomAccessSink>* out) override {
+    return RandomAccessSink::FromPath(path_, direct_io_, out);
+  }
+
+  std::span<uint8_t> DebugBuffer() override { return {}; }
 
   [[nodiscard]] bool requires_alignment() const override { return direct_io_; }
   // TODO(#4) determine actual sector size

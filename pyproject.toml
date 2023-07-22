@@ -4,7 +4,27 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "quiver"
+readme = "REAMDE.md"
+license = "Apache-2.0"
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3"
+]
 version = "0.0.1"
+dependencies = [
+    "pyarrow >= 1.0.0"
+]
+
+[project.optional-dependencies]
+dev = [ "bumpver", "pytest" ]
+
+[project.urls]
+Homepage = "https://github.com/westonpace/quiver"
 
 [tool.scikit-build.cmake.define]
 QUIVER_PYTHON_BINDINGS = "ON"
@@ -31,10 +51,10 @@ cmake.args = []
 cmake.verbose = true
 
 # This controls the CMake build type
-cmake.build-type = "Debug"
+cmake.build-type = "RelWithDebInfo"
 
 # Display logs at or above this level.
-logging.level = "WARNING"
+logging.level = "DEBUG"
 
 # Include and exclude patterns, in gitignore syntax. Include overrides exclude.
 # Wheels include packages included in the sdist; CMake has the final say.

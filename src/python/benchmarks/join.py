@@ -222,11 +222,10 @@ def simulate_inner_join(
     def consume(batch):
         global total_rows
         total_rows += batch.num_rows
-        print(
-            f"Join returned batch with {batch.num_rows}({total_rows}) rows and {batch.num_columns} columns"
-        )
 
-    return hashmap.inner_join(probe_data, consume)
+    joined = hashmap.inner_join(probe_data, consume)
+    del hashmap
+    return joined
 
 
 @pytest.mark.parametrize(

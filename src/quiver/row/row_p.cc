@@ -18,6 +18,7 @@
 #include "quiver/row/row_p.h"
 
 #include <linux/io_uring.h>
+#include <spdlog/spdlog.h>
 #include <sys/mman.h>
 
 #include <atomic>
@@ -222,7 +223,8 @@ class FlatEncoder {
     bitmask_ = 1;
   }
 
-  void EncodeValue(StreamSink* sink) {
+  void EncodeValue(SinkBuffer* sink) {
+    SPDLOG_TRACE("Encoding {} bytes value", width_);
     sink->CopyInto(values_, width_);
     values_ += width_;
   }
@@ -250,28 +252,6 @@ class FlatEncoder {
   uint8_t bitmask_{};
 };
 
-template <typename ArrayType, typename OffsetType>
-class ContiguousListEncoder {
- public:
-  void Prepare(const ReadOnlyArray& array) {
-    const ArrayType& clist_array = std::get<ArrayType>(array);
-    offsets = clist_array.offsets.data();
-    validity = clist_array.validity.data();
-    bitmask = 1;
-  }
-
-  void EncodeOffset(StreamSink* sink) {
-    sink->CopyInto(offsets, sizeof(OffsetType));
-    offsets++;
-  }
-
- private:
-  const OffsetType* offsets;
-  const uint8_t* data;
-  const uint8_t* validity;
-  uint8_t bitmask;
-};
-
 class RowEncoderImpl : public RowEncoder {
  public:
   RowEncoderImpl(RowSchema schema, Storage* storage)
@@ -281,7 +261,7 @@ class RowEncoderImpl : public RowEncoder {
   }
 
   Status Initialize() {
-    QUIVER_RETURN_NOT_OK(storage_->OpenStreamSink(&sink_));
+    QUIVER_RETURN_NOT_OK(storage_->OpenRandomAccessSink(&sink_));
     for (std::size_t field_idx = 0; field_idx < schema_.schema->top_level_types.size();
          field_idx++) {
       const auto& field = schema_.schema->top_level_types[field_idx];
@@ -308,11 +288,16 @@ class RowEncoderImpl : public RowEncoder {
       int32_t field_idx = flat_col_indices[flat_idx];
       flat_encoders[flat_idx].Prepare(batch.array(field_idx));
     }
+    SinkBuffer sink_buffer;
+    int64_t chunk_bytes = batch.length() * schema_.fixed_length;
+    QUIVER_RETURN_NOT_OK(sink_->ReserveChunkAt(offset_bytes_, chunk_bytes, &sink_buffer));
+    SPDLOG_TRACE("Appending batch of {} bytes to offset {}", chunk_bytes, offset_bytes_);
+    offset_bytes_ += chunk_bytes;
     int64_t batch_length = batch.length();
     for (int64_t row_idx = 0; row_idx < batch_length; row_idx++) {
       // Encode values
       for (auto& flat_encoder : flat_encoders) {
-        flat_encoder.EncodeValue(sink_.get());
+        flat_encoder.EncodeValue(&sink_buffer);
       }
       // Encode validity
       uint8_t bitmask = 1;
@@ -324,34 +309,37 @@ class RowEncoderImpl : public RowEncoder {
         bitmask <<= 1;
         if (bitmask == 0) {
           bitmask = 1;
-          sink_->CopyInto(validity_byte);
+          SPDLOG_TRACE("Encoding validity byte (full byte)");
+          sink_buffer.CopyInto(validity_byte);
         }
       }
       if (bitmask != 1) {
-        sink_->CopyInto(validity_byte);
+        SPDLOG_TRACE("Encoding validity byte (remainder)");
+        sink_buffer.CopyInto(validity_byte);
       }
-      sink_->FillZero(schema_.row_padding);
+      SPDLOG_TRACE("Padding {} padidng bytes", schema_.row_padding);
+      sink_buffer.FillZero(schema_.row_padding);
     }
     return Status::OK();
   }
 
-  void Finish() override { sink_->Finish(); }
+  Status Finish() override { return sink_->Finish(); }
+
+  Status Reset() override {
+    offset_bytes_ = 0;
+    return Status::OK();
+  }
 
  private:
   const RowSchema schema_;
   Storage* storage_;
-  std::unique_ptr<StreamSink> sink_;
+  std::unique_ptr<RandomAccessSink> sink_;
   int64_t row_id_counter_ = 0;
+  int64_t offset_bytes_ = 0;
 
   std::vector<int32_t> flat_col_indices;
   std::vector<FlatEncoder> flat_encoders;
   std::vector<FlatEncoder> flat_encoders_may_have_nulls;
-  std::vector<int32_t> clist_int32_indices;
-  std::vector<ContiguousListEncoder<Int32ContiguousListArray, int32_t>>
-      clist_int32_encoders;
-  std::vector<int32_t> clist_int64_indices;
-  std::vector<ContiguousListEncoder<Int64ContiguousListArray, int64_t>>
-      clist_int64_encoders;
 };
 
 Status RowEncoder::Create(const SimpleSchema* schema, Storage* storage, bool direct_io,
