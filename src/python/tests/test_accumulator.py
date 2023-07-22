@@ -1,6 +1,6 @@
 import pyarrow as pa
 
-from quiver.collections import Accumulator
+from pyquiver.collections import Accumulator
 
 
 def test_basic():

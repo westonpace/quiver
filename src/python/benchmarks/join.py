@@ -3,8 +3,8 @@ import numpy as np
 import polars
 import pyarrow as pa
 import pyarrow.compute as pc
-import quiver.collections
-import quiver
+import pyquiver.collections
+import pyquiver
 import pytest
 
 ### Data shape ###
@@ -195,7 +195,7 @@ def generate_build_data(combined_schema, build_size_bytes, row_width_bytes):
 
 
 def create_hashmap(key_schema, build_payload_schema, probe_payload_schema):
-    return quiver.collections.HashMap(
+    return pyquiver.collections.HashMap(
         key_schema,
         build_payload_schema,
         probe_payload_schema,
@@ -265,12 +265,12 @@ def test_join_scenario(
     print(pc.count_distinct(build_data.column(0)))
     print(pc.count_distinct(probe_data.column(0)))
 
-    quiver.clear_tracing()
+    pyquiver.clear_tracing()
     simulate_inner_join(
         key_schema, payload_schema, payload_schema, build_data, probe_data
     )
-    quiver.print_tracing()
-    quiver.print_tracing_histogram()
+    pyquiver.print_tracing()
+    pyquiver.print_tracing_histogram()
 
 
 if __name__ == "__main__":

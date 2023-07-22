@@ -1,6 +1,6 @@
 import pyarrow as pa
 
-from quiver.collections import HashMap
+from pyquiver.collections import HashMap
 
 
 class Schemas(object):
