@@ -1,0 +1,33 @@
+# Rationale for skipped checks:
+#
+# llvm-header-guard - this check requires header files to be in a separate include
+#     directory. Doing this would be tolerable except we would not put private includes
+#     in such a directory.  This would mean we cannot lint private includes with this
+#     check.  As such, we disable this check.  Furthermore, since we are disabling this
+#     anyways we go ahead and use #pragma once for simplicity.
+#
+# modernize-use-trailing-return-type - this check disagrees with the google c++ style
+#     guide and we agree with the rationale in the style guide.  Namely that there are
+#     too many large existing code bases that will not migrate.
+
+Checks: bugprone-*,
+    llvm-*,
+    misc-*,
+    modernize-*,
+    performance-*,
+    portability-*,
+    readability-*,
+    -bugprone-easily-swappable-parameters,
+    -llvm-header-guard,
+    -misc-no-recursion,
+    -modernize-use-trailing-return-type,
+    -readability-function-cognitive-complexity,
+    -readability-magic-numbers,
+    -readability-convert-member-functions-to-static
+
+CheckOptions:
+    misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic: true
+
+WarningsAsErrors: "*"
+
+HeaderFilterRegex: "*"

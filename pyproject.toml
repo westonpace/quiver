@@ -1,0 +1,79 @@
+[build-system]
+requires = ["scikit-build-core", "pybind11"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "pyquiver"
+readme = "README.md"
+license = { file = "LICENSE.txt" }
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3"
+]
+version = "0.0.4"
+dependencies = [
+    "pyarrow >= 1.0.0"
+]
+
+[project.optional-dependencies]
+dev = [ "bumpver", "pytest" ]
+
+[project.urls]
+Homepage = "https://github.com/westonpace/quiver"
+
+[bumpver]
+current_version = "0.0.4"
+version_pattern = "MAJOR.MINOR.PATCH"
+
+[tool.scikit-build.cmake.define]
+QUIVER_PYTHON_BINDINGS = "ON"
+QUIVER_INSTALL_CXX = "OFF"
+
+[tool.scikit-build]
+# The PEP 517 build hooks will add ninja and/or cmake if the versions on the
+# system are not at least these versions. Disabled by an empty string.
+cmake.minimum-version = "3.16"
+ninja.minimum-version = "1.5"
+
+build-dir = "/tmp/skbuild"
+
+# Fallback on gmake/make if available and ninja is missing (Unix). Will only
+# fallback on platforms without a known ninja wheel.
+ninja.make-fallback = true
+
+# Extra args for CMake. Pip, unlike build, does not support lists, so semicolon
+# can be used to separate. Setting this in config or envvar will override the
+# entire list. See also cmake.define.
+cmake.args = []
+
+# This activates verbose builds
+cmake.verbose = true
+
+# This controls the CMake build type
+# cmake.build-type = "RelWithDebInfo"
+cmake.build-type = "Debug"
+
+# Display logs at or above this level.
+logging.level = "DEBUG"
+
+# Include and exclude patterns, in gitignore syntax. Include overrides exclude.
+# Wheels include packages included in the sdist; CMake has the final say.
+sdist.include = []
+sdist.exclude = []
+
+# The root-level packages to include. Special default: if not given, the package
+# is auto-discovered if it's name matches the main name.
+wheel.packages = ["src/<package>", "<package>"]
+
+# This allows you to change the install dir, such as to the package name. The
+# original dir is still at SKBUILD_PLATLIB_DIR (also SKBUILD_DATA_DIR, etc. are
+# available)
+wheel.install-dir = "."
+
+# The licence file(s) to include in the wheel metadata directory.
+wheel.license-files = ["LICEN[CS]E*", "COPYING*", "NOTICE*", "AUTHORS*"]

@@ -1,0 +1,34 @@
+[
+  {
+    "include": [
+      "@<gtest/.*>",
+      "private",
+      "<gtest/gtest.h>",
+      "public"
+    ]
+  },
+  {
+    "include": [
+      "<linux/sysinfo.h>",
+      "private",
+      "<sys/sysinfo.h>",
+      "public"
+    ]
+  },
+  {
+    "symbol": [
+      "std::stringstream",
+      "private",
+      "<sstream>",
+      "public"
+    ]
+  },
+  {
+    "symbol": [
+      "errno",
+      "private",
+      "<cerrno>",
+      "public"
+    ]
+  }
+]
