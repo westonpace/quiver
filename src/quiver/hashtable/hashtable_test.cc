@@ -153,7 +153,7 @@ TEST(StlHashTable, Random) {
       int64_t last_hash_id = prev_hash_idx_offset;
       // Every hash should match at least one row (in which case out_hash_idx would be
       // strictly monotonic) or mulitple rows (in which case there may be some duplicates)
-      for (std::size_t i = 0; i < length; i++) {
+      for (int64_t i = 0; i < length; i++) {
         ASSERT_THAT(out_hash_idx->data()[i],
                     ::testing::AnyOf(last_hash_id, last_hash_id + 1));
         last_hash_id = out_hash_idx->data()[i];

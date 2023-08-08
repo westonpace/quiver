@@ -11,11 +11,6 @@
 
 namespace quiver::accum {
 
-static constexpr std::array<uint8_t, 8> kLowerBitsMask = {0xFF, 0x7F, 0x3F, 0x1F,
-                                                          0x0F, 0x07, 0x03, 0x01};
-static constexpr std::array<uint8_t, 8> kUpperBitsMask = {0xFF, 0xFE, 0xFC, 0xF8,
-                                                          0xF0, 0xE0, 0xC0, 0x80};
-
 class FlatColumnAccumulator {
  public:
   FlatColumnAccumulator(int32_t col_index) : col_index_(col_index) {}
@@ -89,7 +84,10 @@ class FlatColumnAccumulator {
     if (validity_src == nullptr) {
       // TODO: Technically this could mean that everything is null.  We should handle
       // that case too
-      bit_util::SetBitmap(validity_dst, index_in_batch_, src.length);
+      DCHECK_LE(
+          bit_util::CeilDiv(index_in_batch_ + static_cast<int64_t>(indices.size()), 8LL),
+          static_cast<int64_t>(current_array_.validity.size()));
+      bit_util::SetBitmap(validity_dst, index_in_batch_, indices.size());
     } else {
       util::IndexedCopyBitmap(validity_src, indices, validity_dst, index_in_batch_);
     }

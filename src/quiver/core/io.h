@@ -185,6 +185,7 @@ class BufferSource {
 
 class FileSource {
  public:
+  virtual ~FileSource() = default;
   explicit FileSource(int file_descriptor) : file_descriptor_(file_descriptor) {}
   [[nodiscard]] int file_descriptor() const { return file_descriptor_; }
   void CopyDataInto(uint8_t* dest, int64_t offset, int32_t len) const {
@@ -201,6 +202,7 @@ enum class RandomAccessSourceKind { kBuffer = 0, kFile = 1 };
 
 class RandomAccessSource {
  public:
+  virtual ~RandomAccessSource() = default;
   explicit RandomAccessSource(RandomAccessSourceKind kind) : kind_(kind) {}
   virtual BufferSource AsBuffer() = 0;
   virtual FileSource AsFile() = 0;

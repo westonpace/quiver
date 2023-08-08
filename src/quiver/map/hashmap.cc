@@ -231,12 +231,6 @@ class HashMapImpl : public HashMap {
 
       std::span<int64_t> key_row_ids = out_row_ids->subspan(0, length_out);
 
-      std::cout << "Key Row Ids: [";
-      for (const auto& item : key_row_ids) {
-        std::cout << item << ",";
-      }
-      std::cout << "]" << std::endl;
-
       QUIVER_RETURN_NOT_OK(row_decoder_->Load(key_row_ids, scratch.get()));
       QUIVER_RETURN_NOT_OK(accumulator.build->InsertRange(scratch.get()));
 

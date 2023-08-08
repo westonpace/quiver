@@ -16,6 +16,7 @@ option(QUIVER_BUILD_TESTS "Build tests" OFF)
 option(QUIVER_BUILD_BENCHMARKS "Build benchmarks" OFF)
 option(QUIVER_PYTHON_BINDINGS "Build python bindings" OFF)
 option(QUIVER_INSTALL_CXX "Install C++ library" ON)
+option(QUIVER_SANITIZER "Enable sanitizers" OFF)
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake-modules)
 include(ClangTools)
@@ -63,6 +64,22 @@ endif()
 # Have to enable clang-tidy after building 3rd party libs
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Global compiler config
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    add_compile_options(-Wall -Werror -Wextra -Wpedantic -Wunused-result)
+  elseif(CMAKE_C_COMPILER_ID STREQUAL "AppleClang" OR CMAKE_C_COMPILER_ID
+                                                      STREQUAL "Clang")
+    add_compile_options(-Wall -Werror -Wextra -Wdocumentation
+                            -Wshorten-64-to-32)
+    if (QUIVER_SANITIZER)
+      add_compile_options(-fsanitize=undefined -fsanitize=address)
+      add_link_options(-fsanitize=undefined -fsanitize=address)
+    endif()
+  endif()
+endif()
+
+
 add_library(
   quiver_static STATIC
   src/quiver/lib.cc
@@ -104,23 +121,9 @@ target_precompile_headers(quiver_static PRIVATE src/quiver/pch.h)
 target_include_directories(quiver_static PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(quiver_static PRIVATE spdlog::spdlog fmt::fmt)
 target_compile_definitions(quiver_static PRIVATE SPDLOG_FMT_EXTERNAL)
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-  target_compile_definitions(quiver_static PRIVATE SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
-  if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
-    target_compile_options(quiver_static PRIVATE -Wall -Werror -Wextra
-                                                 -Wpedantic -Wunused-result)
-  elseif(CMAKE_C_COMPILER_ID STREQUAL "AppleClang" OR CMAKE_C_COMPILER_ID
-                                                      STREQUAL "Clang")
-    target_compile_options(
-      quiver_static PRIVATE -Wall -Werror -Wextra -Wdocumentation
-                            -Wshorten-64-to-32 -fsanitize=undefined)
-    target_link_options(quiver_static PRIVATE -fsanitize=undefined)
-  endif()
-  if(QUIVER_CODE_COVERAGE)
-    append_coverage_compiler_flags_to_target(quiver_static)
-  endif()
-else()
-  target_compile_definitions(quiver_static PRIVATE SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG)
+target_compile_definitions(quiver_static PRIVATE SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
+if(QUIVER_CODE_COVERAGE)
+  append_coverage_compiler_flags_to_target(quiver_static)
 endif()
 
 if(QUIVER_PYTHON_BINDINGS)

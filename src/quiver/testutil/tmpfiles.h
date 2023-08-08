@@ -7,6 +7,7 @@ namespace quiver::testutil {
 
 class TemporaryFilesManager {
  public:
+  virtual ~TemporaryFilesManager() = default;
   virtual std::string NewTemporaryFile() = 0;
 };
 

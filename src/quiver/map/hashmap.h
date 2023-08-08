@@ -25,7 +25,7 @@ class HashMap {
   /// Inserts rows into the map but accepts data as a single batch of
   /// key and payload
   ///
-  /// \param bathc the batch to insert
+  /// \param keys the keys to insert
   ///
   /// \return Status::OK() if the insert succeeded, otherwise an error
   virtual Status InsertCombinedBatch(ReadOnlyBatch* keys) = 0;

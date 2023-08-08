@@ -13,15 +13,13 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: C++",
-    "Programming Language :: Python :: 3"
+    "Programming Language :: Python :: 3",
 ]
 version = "0.0.4"
-dependencies = [
-    "pyarrow >= 1.0.0"
-]
+dependencies = ["pyarrow >= 1.0.0"]
 
 [project.optional-dependencies]
-dev = [ "bumpver", "pytest" ]
+dev = ["bumpver", "pytest"]
 
 [project.urls]
 Homepage = "https://github.com/westonpace/quiver"
@@ -33,6 +31,8 @@ version_pattern = "MAJOR.MINOR.PATCH"
 [tool.scikit-build.cmake.define]
 QUIVER_PYTHON_BINDINGS = "ON"
 QUIVER_INSTALL_CXX = "OFF"
+# CMAKE_CXX_COMPILER = "/usr/bin/clang++-18"
+# CMAKE_C_COMPILER = "/usr/bin/clang-18"
 
 [tool.scikit-build]
 # The PEP 517 build hooks will add ninja and/or cmake if the versions on the
@@ -51,12 +51,15 @@ ninja.make-fallback = true
 # entire list. See also cmake.define.
 cmake.args = []
 
+# Do not strip debug symbols
+install.strip = false
+
 # This activates verbose builds
 cmake.verbose = true
 
 # This controls the CMake build type
-# cmake.build-type = "RelWithDebInfo"
-cmake.build-type = "Debug"
+cmake.build-type = "RelWithDebInfo"
+# cmake.build-type = "Debug"
 
 # Display logs at or above this level.
 logging.level = "DEBUG"

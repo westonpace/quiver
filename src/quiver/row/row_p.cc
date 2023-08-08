@@ -788,7 +788,7 @@ class IoUringDecoderImpl : public RowDecoder {
       int64_t waiting_index = loop_offset % kIoUringDepth;
       while (scratch_offsets_[waiting_index] != schema_.fixed_length) {
         IoUringSource::ReadResult read = src.FinishRead();
-        uint32_t scratch_index = read.user_data;
+        uint64_t scratch_index = read.user_data;
         scratch_offsets_[scratch_index] += read.len;
       }
       StagedDecode(*scratch_space_[waiting_index]);

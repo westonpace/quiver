@@ -5,6 +5,7 @@ namespace quiver::sort {
 
 class AllColumnsBinarySorter {
  public:
+  virtual ~AllColumnsBinarySorter() = default;
   virtual Status Sort(const ReadOnlyBatch& unsorted, Batch* sorted) = 0;
   static Status Create(Storage* storage, std::unique_ptr<AllColumnsBinarySorter>* out);
 };

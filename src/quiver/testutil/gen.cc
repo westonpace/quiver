@@ -6,13 +6,7 @@
 
 namespace quiver::util {
 
-    namespace {
-        void RandomizeFlatArray() {
-
-}
-}
-
-void RandomizeArray(Batch* batch, int array_index, int array_size = -1) {
+void RandomizeArray(Batch* batch, int array_index, [[maybe_unused]] int array_size = -1) {
   const FieldDescriptor& type = batch->schema()->top_level_types[array_index];
   switch (type.layout) {
     case LayoutKind::kFlat: {
